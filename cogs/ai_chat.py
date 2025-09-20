@@ -31,7 +31,6 @@ class AIChat(commands.Cog):
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
 
     async def process_memory_consolidation(self, message, user_message, bot_response_text):
-        # ... (この関数の中身は変更なし) ...
         try:
             memory = load_memory()
             user_id = str(message.author.id)
@@ -108,17 +107,10 @@ class AIChat(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author == self.bot.user or message.content.startswith('!'):
+        if message.author == self.bot.user:
             return
-        
-        # ▼▼▼ 新しい、超分かりやすい証拠を仕込んだわ！ ▼▼▼
-        print(f"--- on_message in ai_chat.py DETECTED a message from {message.author.name} ---")
-        # ▲▲▲ ここまで ▲▲▲
 
         if self.bot.user.mentioned_in(message):
-            # ▼▼▼ こっちにも証拠を仕込んだわ！ ▼▼▼
-            print(f"--- MENTION DETECTED! Starting AI response process... ---")
-            # ▲▲▲ ここまで ▲▲▲
             async with message.channel.typing():
                 user_id = str(message.author.id)
                 user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
@@ -139,12 +131,6 @@ class AIChat(commands.Cog):
                 【例2】
                 [質問]: 昨日の野球の試合結果を教えて
                 [判断]: SEARCH|昨日のプロ野球 試合結果
-                【例3】
-                [質問]: 今日の東京の天気は？
-                [判断]: SEARCH|今日の東京の天気
-                【例4】
-                [質問]: 今日の株価を教えて
-                [判断]: SEARCH|今日の日経平均株価
                 ---
                 [今回の質問]: {user_message}
                 [判断]:"""
@@ -236,6 +222,9 @@ class AIChat(commands.Cog):
 
                 except Exception as e:
                     await message.channel.send(f"エラーが発生しました: {e}")
+        
+        # ▼▼▼ 社内ルールを修正したわよ！ ▼▼▼
+        await self.bot.process_commands(message)
 
 async def setup(bot):
     await bot.add_cog(AIChat(bot))
