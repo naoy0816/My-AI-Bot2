@@ -156,6 +156,7 @@ class AIChat(commands.Cog):
                 try:
                     planning_response = await self.model.generate_content_async(planning_prompt)
                     decision = planning_response.text.strip()
+                    print(f"AI's first thought (decision): {decision}")
                 except Exception as e:
                     await message.channel.send(f"（アタシの頭脳にエラー発生よ…ちょっと待ちなさい…: {e}}]）")
                     return
