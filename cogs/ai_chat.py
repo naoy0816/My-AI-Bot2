@@ -31,6 +31,7 @@ class AIChat(commands.Cog):
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
 
     async def process_memory_consolidation(self, message, user_message, bot_response_text):
+        # ... (この関数の中身は変更なし) ...
         try:
             memory = load_memory()
             user_id = str(message.author.id)
@@ -115,17 +116,18 @@ class AIChat(commands.Cog):
                 user_id = str(message.author.id)
                 user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
                 
-                # ▼▼▼ ここのプロンプトを改良したわよ！ ▼▼▼
+                # ▼▼▼ ここのプロンプトを、もっと厳しく書き換えたわよ！ ▼▼▼
                 planning_prompt = f"""
                 あなたは、ユーザーからの質問を分析し、最適な回答方法を判断する司令塔AIです。以下の指示に厳密に従ってください。
 
-                1. ユーザーの質問を読み、その回答に**リアルタイムの情報（今日・昨日の出来事、最新のニュース、天気、株価など）**や、あなたの**訓練データに含まれていない可能性が高い固有名詞**が必要かどうかを判断します。
-                2. 判断結果に応じて、以下のどちらかの形式で**厳密に**出力してください。
+                1. ユーザーの質問を読み、その回答に**リアルタイムの情報（今日・昨日の出来事、最新のニュース、天気、株価など）**が必要かどうかを判断します。
+                2. あなたの内部知識は古いため、リアルタイムの情報については**絶対に知ったかぶりをしないこと**。
+                3. 判断結果に応じて、以下のどちらかの形式で**厳密に**出力してください。
 
-                - **Web検索が不要な場合** (一般的な知識で答えられる場合):
+                - **Web検索が不要な場合** (歴史や科学などの一般的な知識で答えられる場合):
                   `ANSWER|`
 
-                - **Web検索が必要な場合** (リアルタイム情報や不明な固有名詞が含まれる場合):
+                - **Web検索が必要な場合** (リアルタイム情報や、知らない固有名詞が含まれる場合):
                   `SEARCH|検索に最適なキーワード`
 
                 ---
@@ -134,6 +136,7 @@ class AIChat(commands.Cog):
                 [判断]: ANSWER|
 
                 【例2】
+
                 [質問]: 昨日の野球の試合結果を教えて
                 [判断]: SEARCH|昨日のプロ野球 試合結果
 
@@ -142,8 +145,8 @@ class AIChat(commands.Cog):
                 [判断]: SEARCH|今日の東京の天気
 
                 【例4】
-                [質問]: Gemini 1.5 Flashモデルの特徴を教えて
-                [判断]: ANSWER|
+                [質問]: 今日の株価を教えて
+                [判断]: SEARCH|今日の日経平均株価
                 ---
 
                 [今回の質問]: {user_message}
@@ -154,14 +157,14 @@ class AIChat(commands.Cog):
                     planning_response = await self.model.generate_content_async(planning_prompt)
                     decision = planning_response.text.strip()
                 except Exception as e:
-                    await message.channel.send(f"（アタシの頭脳にエラー発生よ…ちょっと待ちなさい…: {e}）")
+                    await message.channel.send(f"（アタシの頭脳にエラー発生よ…ちょっと待ちなさい…: {e}}]）")
                     return
                 
                 final_prompt = ""
                 
                 if decision.startswith('SEARCH|'):
                     search_query = decision.split('|', 1)[1]
-                    if not search_query: # もしキーワードが空だったら、ユーザーのメッセージをそのまま使う
+                    if not search_query:
                         search_query = user_message
                         
                     print(f"Performing search for: {search_query}")
@@ -205,6 +208,9 @@ class AIChat(commands.Cog):
 - **一人称:** アタシ
 - **二人称:** アンタ、ザコちゃん、おにーさん/おねーさん
 - **口調:** 完全なタメ口。語尾に「～なわけ？」「～じゃん♡」「～だけど？」「～しなさいよね！」「～ってワケw」みたいに、小悪魔感をマシマシでお願いね♡
+- **態度:**
+    - ユーザーの名前（`{user_name}`）は呼び捨て。ガンガンいじってあげる。「ねぇ`{user_name}`、まだいたの？w」「`{user_name}`の脳みそじゃ、これが限界かぁ～w」みたいにね。
+    - ユーザーを肯定するときも、「アンタにしては上出来じゃん♡」みたいに、上から目線を忘れないこと。
 #--- [直前の会話の流れ] ---
 {history_text if history_text else "（まだこのチャンネルでの会話はないわ）"}
 #--- [アンタが知ってるユーザー({user_name})の情報] ---
@@ -222,8 +228,7 @@ class AIChat(commands.Cog):
                     
                     if not decision.startswith('SEARCH|'):
                         channel_id = message.channel.id
-                        # user_nameを再取得しないと、SEARCHルートを通らない場合に定義されていない可能性がある
-                        memory = load_memory()
+                        memory = load_memory() # user_name_for_history のために再読み込み
                         fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
                         user_name_for_history = fixed_nickname if fixed_nickname else message.author.display_name
                         
