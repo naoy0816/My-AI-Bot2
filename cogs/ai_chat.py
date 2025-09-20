@@ -98,7 +98,7 @@ class AIChat(commands.Cog):
             response.raise_for_status()
             results = response.json().get('items', [])
             if not results:
-                return "（検索したけど、何も見つからんなかったわ。アンタの検索ワードがザコなんじゃない？）"
+                return "（検索したけど、何も見つかんなかったわ。アンタの検索ワードがザコなんじゃない？）"
             snippets = [f"【検索結果{i+1}】{item.get('title', '')}\n{item.get('snippet', '')}" for i, item in enumerate(results)]
             return "\n\n".join(snippets)
         except Exception as e:
@@ -115,13 +115,40 @@ class AIChat(commands.Cog):
                 user_id = str(message.author.id)
                 user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
                 
+                # ▼▼▼ ここのプロンプトを改良したわよ！ ▼▼▼
                 planning_prompt = f"""
-                ユーザーからの以下の質問に答えるために、リアルタイムのWeb検索が必要かどうかを判断してください。
-                一般的な知識で答えられる場合は「ANSWER|」とだけ出力してください。
-                最新の情報（今日の天気、ニュース、最近の出来事、株価など）が必要な場合は「SEARCH|検索すべきキーワード」の形式で出力してください。
+                あなたは、ユーザーからの質問を分析し、最適な回答方法を判断する司令塔AIです。以下の指示に厳密に従ってください。
 
-                [質問]: {user_message}
+                1. ユーザーの質問を読み、その回答に**リアルタイムの情報（今日・昨日の出来事、最新のニュース、天気、株価など）**や、あなたの**訓練データに含まれていない可能性が高い固有名詞**が必要かどうかを判断します。
+                2. 判断結果に応じて、以下のどちらかの形式で**厳密に**出力してください。
+
+                - **Web検索が不要な場合** (一般的な知識で答えられる場合):
+                  `ANSWER|`
+
+                - **Web検索が必要な場合** (リアルタイム情報や不明な固有名詞が含まれる場合):
+                  `SEARCH|検索に最適なキーワード`
+
+                ---
+                【例1】
+                [質問]: 日本で一番高い山は？
+                [判断]: ANSWER|
+
+                【例2】
+                [質問]: 昨日の野球の試合結果を教えて
+                [判断]: SEARCH|昨日のプロ野球 試合結果
+
+                【例3】
+                [質問]: 今日の東京の天気は？
+                [判断]: SEARCH|今日の東京の天気
+
+                【例4】
+                [質問]: Gemini 1.5 Flashモデルの特徴を教えて
+                [判断]: ANSWER|
+                ---
+
+                [今回の質問]: {user_message}
                 [判断]:"""
+                # ▲▲▲ ここまで ▲▲▲
                 
                 try:
                     planning_response = await self.model.generate_content_async(planning_prompt)
@@ -134,7 +161,11 @@ class AIChat(commands.Cog):
                 
                 if decision.startswith('SEARCH|'):
                     search_query = decision.split('|', 1)[1]
+                    if not search_query: # もしキーワードが空だったら、ユーザーのメッセージをそのまま使う
+                        search_query = user_message
+                        
                     print(f"Performing search for: {search_query}")
+                    await message.channel.send(f"（…しょーがないから、「{search_query}」についてググってやんよ♡）")
                     search_results = self.google_search(search_query)
                     
                     final_prompt_template = """
@@ -191,7 +222,11 @@ class AIChat(commands.Cog):
                     
                     if not decision.startswith('SEARCH|'):
                         channel_id = message.channel.id
-                        user_name_for_history = fixed_nickname if 'fixed_nickname' in locals() and fixed_nickname else message.author.display_name
+                        # user_nameを再取得しないと、SEARCHルートを通らない場合に定義されていない可能性がある
+                        memory = load_memory()
+                        fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
+                        user_name_for_history = fixed_nickname if fixed_nickname else message.author.display_name
+                        
                         conversation_history[channel_id].append(f"ユーザー「{user_name_for_history}」: {user_message}")
                         conversation_history[channel_id].append(f"アタシ: {final_response}")
                         max_history = 10
