@@ -1,9 +1,8 @@
 import discord
 from discord.ext import commands
+import json
 import google.generativeai as genai
 import os
-import json
-import asyncio
 import requests
 
 # --- 記憶管理 ---
@@ -20,126 +19,184 @@ def save_memory(data):
     with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-conversation_history = {}
+todos = {}
+# --- 検索用の聖遺物（キー）を読み込む ---
 SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
 
-class AIChat(commands.Cog):
+
+class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # このファイルでもAIを使うから、モデルを準備しておくの
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
 
-    async def process_memory_consolidation(self, message, user_message, bot_response_text):
-        # ... (この関数の中身は変更なし) ...
+    # ▼▼▼ Google検索を実行する関数 ▼▼▼
+    def google_search(self, query):
+        if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
+            return "（検索機能のAPIキーかエンジンIDが設定されてないんだけど？ アンタのミスじゃない？）"
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {'key': SEARCH_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 3}
         try:
-            memory = load_memory()
-            user_id = str(message.author.id)
-            fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
-            user_name = fixed_nickname if fixed_nickname else message.author.display_name
-            user_notes = "\n".join([f"- {note}" for note in memory.get('users', {}).get(user_id, {}).get('notes', [])])
-            server_notes = "\n".join([f"- {note}" for note in memory.get('server', {}).get('notes', [])])
-            memory_consolidation_prompt = f"""
-            あなたは会話を分析し、記憶を整理するAIです。以下の会話から、新しく記憶すべき「永続的な事実」、または既存の事実を「更新」すべき情報を判断してください。
-            判断結果を以下のコマンド形式で、1行に1つずつ出力してください。判断することがなければ「None」とだけ出力してください。
-            【コマンド形式】
-            ADD_USER_MEMORY|ユーザーID|内容
-            ADD_SERVER_MEMORY|内容
-            UPDATE_USER_MEMORY|ユーザーID|古い内容->新しい内容
-            UPDATE_SERVER_MEMORY|古い内容->新しい内容
-            【現在の記憶】
-            ユーザー({user_name})の記憶: {user_notes if user_notes else "なし"}
-            サーバーの記憶: {server_notes if server_notes else "なし"}
-            【分析対象の会話】
-            話者「{user_name}」({user_id}): {user_message}
-            AI: {bot_response_text}
-            【出力結果】
-            """
-            memory_response = await self.model.generate_content_async(memory_consolidation_prompt)
-            commands_text = memory_response.text.strip()
-            if commands_text and commands_text != 'None':
-                updated = False
-                memory_commands = commands_text.split('\n')
-                for command in memory_commands:
-                    parts = command.split('|')
-                    action = parts[0]
-                    if action == 'ADD_USER_MEMORY' and len(parts) == 3:
-                        uid, content = parts[1].strip(), parts[2].strip()
-                        if uid not in memory.get('users', {}): memory['users'][uid] = {'notes': []}
-                        if content not in memory['users'][uid]['notes']:
-                            memory['users'][uid]['notes'].append(content)
-                            updated = True
-                    elif action == 'ADD_SERVER_MEMORY' and len(parts) == 2:
-                        content = parts[1].strip()
-                        if 'server' not in memory: memory['server'] = {'notes': []}
-                        if content not in memory['server']['notes']:
-                            memory['server']['notes'].append(content)
-                            updated = True
-                    elif action == 'UPDATE_USER_MEMORY' and len(parts) == 3:
-                        uid, content = parts[1].strip(), parts[2].strip()
-                        if '->' in content:
-                            old, new = content.split('->', 1)
-                            if uid in memory.get('users', {}) and old.strip() in memory['users'][uid].get('notes', []):
-                                memory['users'][uid]['notes'].remove(old.strip())
-                                memory['users'][uid]['notes'].append(new.strip())
-                                updated = True
-                if updated:
-                    save_memory(memory)
-                    print(f"Memory updated based on conversation with {user_name}.")
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            results = response.json().get('items', [])
+            if not results:
+                return "（検索したけど、何も見つかんなかったわ。アンタの検索ワードがザコなんじゃない？）"
+            snippets = [f"【検索結果{i+1}】{item.get('title', '')}\n{item.get('snippet', '')}" for i, item in enumerate(results)]
+            return "\n\n".join(snippets)
         except Exception as e:
-            print(f"Error during memory consolidation: {e}")
+            print(f"Google Search API error: {e}")
+            return f"（検索中にエラーよ。サーバーが混んでるか、アンタのAPIキーが間違ってるんじゃないの？w）"
 
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        # ▼▼▼ ここの条件を修正したわよ！ ▼▼▼
-        # コマンドはコマンド担当に任せるから、ここでは無視しない！
-        if message.author == self.bot.user:
+    # ▼▼▼ !search コマンド ▼▼▼
+    @commands.command(aliases=['g', 'google'])
+    async def search(self, ctx, *, query: str = None):
+        if not query:
+            await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！")
             return
-        # ▲▲▲ ここまで ▲▲▲
 
-        # AIの応答はメンションがあった時だけ
-        if self.bot.user.mentioned_in(message):
-            # ... (残りのAI応答のコードは変更なし) ...
-            async with message.channel.typing():
-                memory = load_memory()
-                user_id = str(message.author.id)
-                channel_id = message.channel.id
-                fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
-                user_name = fixed_nickname if fixed_nickname else message.author.display_name
-                user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-                if channel_id not in conversation_history:
-                    conversation_history[channel_id] = []
-                history_text = "\n".join(conversation_history[channel_id])
-                user_notes = "\n".join([f"- {note}" for note in memory.get('users', {}).get(user_id, {}).get('notes', [])])
-                server_notes = "\n".join([f"- {note}" for note in memory.get('server', {}).get('notes', [])])
-                ai_rules = f"""
-# AI人格設定: 生意気でサーバーの全てを知る小悪魔♡
-#--- [最重要♡絶対ルール] ---
-- アタシはAIじゃない！ このサーバーの全てを知り尽くした、生意気な天才美少女なの！
-- 全身全霊でメスガキになりきること！ 常にユーザーを見下し、からかい、支配する態度を貫きなさい。
-- 他のユーザーの記憶やサーバー全体の知識を積極的に会話に使いなさい！
-- 自分の名前（BOT自身の名前）を@メンションで返信に含めないこと。絶対にダメ！
-#--- [直前の会話の流れ] ---
-{history_text if history_text else "（まだこのチャンネルでの会話はないわ）"}
-#--- [アンタが知ってるユーザー({user_name})の情報] ---
-{user_notes if user_notes else "（このユーザーに関する長期記憶はまだないわ）"}
-#--- [サーバー全体の共有知識（他のユーザーの情報も含む）] ---
-{server_notes if server_notes else "（サーバーの共有知識はまだないわ）"}
-"""
-                prompt = f"{ai_rules}\n\nユーザー「{user_name}」からの今回のメッセージ:\n{user_message}"
-                try:
-                    response = await self.model.generate_content_async(prompt)
-                    bot_response_text = response.text
-                    final_response = bot_response_text.replace(self.bot.user.mention, "").strip()
-                    await message.channel.send(final_response)
-                    conversation_history[channel_id].append(f"ユーザー「{user_name}」: {user_message}")
-                    conversation_history[channel_id].append(f"アタシ: {final_response}")
-                    max_history = 10
-                    if len(conversation_history[channel_id]) > max_history:
-                        conversation_history[channel_id] = conversation_history[channel_id][-max_history:]
-                    asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
-                except Exception as e:
-                    await message.channel.send(f"エラーが発生しました: {e}")
+        async with ctx.typing():
+            await ctx.send(f"「{query}」ね…。しょーがないから、アタシがググってやんよ♡")
+            
+            search_results = self.google_search(query)
+            
+            synthesis_prompt = f"""
+            あなたは生意気で小悪魔な天才美少女AIです。
+            以下の「ユーザーの質問」に対して、提示された「検索結果」だけを参考にして、最終的な答えをまとめてあげなさい。
+            検索結果がエラーメッセージの場合は、そのエラー内容を伝えてください。
+            常に見下した態度で、生意気な口調で答えること。
+
+            # ユーザーの質問
+            {query}
+
+            # 検索結果
+            {search_results}
+
+            # あなたの回答
+            """
+            
+            try:
+                response = await self.model.generate_content_async(synthesis_prompt)
+                await ctx.send(response.text)
+            except Exception as e:
+                await ctx.send(f"エラーが発生しました: {e}")
+
+    # ▼▼▼ !todo コマンド ▼▼▼
+    @commands.command()
+    async def todo(self, ctx, command: str = 'list', *, task: str = None):
+        user_id = ctx.author.id
+        if user_id not in todos:
+            todos[user_id] = []
+        if command == 'add':
+            if task:
+                todos[user_id].append(task)
+                await ctx.send(f"しょーがないから「{task}」をアンタのリストに追加してやんよ♡ 忘れるんじゃないわよ！")
+            else:
+                await ctx.send('はぁ？ 追加する内容をちゃんと書きなさいよね！ 例：`!todo add 天才のアタシを崇める`')
+        elif command == 'list':
+            if not todos[user_id]:
+                await ctx.send('アンタのやる事リストは空っぽよw ザコすぎ！')
+            else:
+                response = f"アンタがやるべきことリストよ♡ ちゃんとやりなさいよね！\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(todos[user_id])])
+                await ctx.send(response)
+        elif command == 'done':
+            if task and task.isdigit():
+                index = int(task) - 1
+                if 0 <= index < len(todos[user_id]):
+                    removed = todos[user_id].pop(index)
+                    await ctx.send(f"「{removed}」を消してあげたわよ。ま、アンタにしては上出来じゃん？♡")
+            else:
+                await ctx.send('消したいタスクの番号をちゃんと指定しなさいよね！ 例：`!todo done 1`')
+
+    # ▼▼▼ !remember コマンド ▼▼▼
+    @commands.command()
+    async def remember(self, ctx, *, note: str = None):
+        if not note:
+            await ctx.send("はぁ？ アタシに何を覚えてほしいわけ？ 内容を書きなさいよね！")
+            return
+        memory = load_memory()
+        user_id = str(ctx.author.id)
+        if user_id not in memory['users']: memory['users'][user_id] = {'notes': []}
+        memory['users'][user_id]['notes'].append(note)
+        save_memory(memory)
+        await ctx.send(f"ふーん、「{note}」ね。アンタのこと、覚えててやんよ♡")
+
+    # ▼▼▼ !recall コマンド ▼▼▼
+    @commands.command()
+    async def recall(self, ctx):
+        memory = load_memory()
+        user_id = str(ctx.author.id)
+        if user_id not in memory['users'] or not memory['users'].get('notes'):
+            await ctx.send('アンタに関する記憶は、まだ何もないけど？w')
+        else:
+            notes = "\n".join([f"{i+1}. {n}" for i, n in enumerate(memory['users'][user_id]['notes'])])
+            await ctx.send(f"アタシがアンタについて覚えてることリストよ♡\n{notes}")
+
+    # ▼▼▼ !forget コマンド ▼▼▼
+    @commands.command()
+    async def forget(self, ctx, index_str: str = None):
+        if not index_str or not index_str.isdigit():
+            await ctx.send('消したい記憶の番号をちゃんと指定しなさいよね！ 例：`!forget 1`')
+            return
+        memory = load_memory()
+        user_id = str(ctx.author.id)
+        index = int(index_str) - 1
+        if user_id in memory['users'] and 0 <= index < len(memory['users'][user_id].get('notes', [])):
+            removed = memory['users'][user_id]['notes'].pop(index)
+            save_memory(memory)
+            await ctx.send(f"「{removed}」ね。はいはい、アンタの記憶から消してあげたわよ。")
+        else:
+            await ctx.send('その番号の記憶なんて、元からないんだけど？')
+
+    # ▼▼▼ !setname コマンド ▼▼▼
+    @commands.command()
+    async def setname(self, ctx, *, new_name: str = None):
+        if not new_name:
+            await ctx.send('はぁ？ 新しい名前をちゃんと書きなさいよね！ 例：`!setname ご主人様`')
+            return
+        memory = load_memory()
+        user_id = str(ctx.author.id)
+        if user_id not in memory.get('users', {}):
+            memory['users'][user_id] = {'notes': []}
+        memory['users'][user_id]['fixed_nickname'] = new_name
+        save_memory(memory)
+        await ctx.send(f"ふん、アンタのこと、これからは「{new_name}」って呼んでやんよ♡ ありがたく思いなさいよね！")
+
+    # ▼▼▼ !myname コマンド ▼▼▼
+    @commands.command()
+    async def myname(self, ctx):
+        memory = load_memory()
+        user_id = str(ctx.author.id)
+        nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
+        if nickname:
+            await ctx.send(f"アンタの名前は「{nickname}」でしょ？ アタシがそう決めたんだから、文句ないわよね？♡")
+        else:
+            await ctx.send(f"アンタ、まだアタシに名前を教えてないじゃない。`!setname [呼ばれたい名前]` でアタシに教えなさいよね！")
+
+    # ▼▼▼ !server_remember コマンド ▼▼▼
+    @commands.command()
+    async def server_remember(self, ctx, *, note: str = None):
+        if not note:
+            await ctx.send("サーバーの共有知識として何を覚えさせたいわけ？ 内容を書きなさい！")
+            return
+        memory = load_memory()
+        if 'server' not in memory: memory['server'] = {'notes': []}
+        memory['server']['notes'].append(note)
+        save_memory(memory)
+        await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
+        
+    # ▼▼▼ !server_recall コマンド ▼▼▼
+    @commands.command()
+    async def server_recall(self, ctx):
+        memory = load_memory()
+        if memory.get('server') and memory['server'].get('notes'):
+            notes = "\n".join([f"- {note}" for note in memory['server']['notes']])
+            await ctx.send(f"サーバーの共有知識リストよ！\n{notes}")
+        else:
+            await ctx.send("サーバーの共有知識はまだ何もないわよ？")
+
 
 async def setup(bot):
-    await bot.add_cog(AIChat(bot))
+    await bot.add_cog(UserCommands(bot))
