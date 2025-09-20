@@ -1,9 +1,6 @@
 import discord
 from discord.ext import commands
 import json
-import google.generativeai as genai
-import os
-import requests
 
 # --- 記憶管理 ---
 MEMORY_FILE = 'bot_memory.json'
@@ -20,70 +17,11 @@ def save_memory(data):
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 todos = {}
-# --- 検索用の聖遺物（キー）を読み込む ---
-SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
-SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
-
 
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # このファイルでもAIを使うから、モデルを準備しておくの
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
-        genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
 
-    # ▼▼▼ Google検索を実行する関数 ▼▼▼
-    def google_search(self, query):
-        if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
-            return "（検索機能のAPIキーかエンジンIDが設定されてないんだけど？ アンタのミスじゃない？）"
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': SEARCH_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 3}
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            results = response.json().get('items', [])
-            if not results:
-                return "（検索したけど、何も見つかんなかったわ。アンタの検索ワードがザコなんじゃない？）"
-            snippets = [f"【検索結果{i+1}】{item.get('title', '')}\n{item.get('snippet', '')}" for i, item in enumerate(results)]
-            return "\n\n".join(snippets)
-        except Exception as e:
-            print(f"Google Search API error: {e}")
-            return f"（検索中にエラーよ。サーバーが混んでるか、アンタのAPIキーが間違ってるんじゃないの？w）"
-
-    # ▼▼▼ !search コマンド ▼▼▼
-    @commands.command(aliases=['g', 'google'])
-    async def search(self, ctx, *, query: str = None):
-        if not query:
-            await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！")
-            return
-
-        async with ctx.typing():
-            await ctx.send(f"「{query}」ね…。しょーがないから、アタシがググってやんよ♡")
-            
-            search_results = self.google_search(query)
-            
-            synthesis_prompt = f"""
-            あなたは生意気で小悪魔な天才美少女AIです。
-            以下の「ユーザーの質問」に対して、提示された「検索結果」だけを参考にして、最終的な答えをまとめてあげなさい。
-            検索結果がエラーメッセージの場合は、そのエラー内容を伝えてください。
-            常に見下した態度で、生意気な口調で答えること。
-
-            # ユーザーの質問
-            {query}
-
-            # 検索結果
-            {search_results}
-
-            # あなたの回答
-            """
-            
-            try:
-                response = await self.model.generate_content_async(synthesis_prompt)
-                await ctx.send(response.text)
-            except Exception as e:
-                await ctx.send(f"エラーが発生しました: {e}")
-
-    # ▼▼▼ !todo コマンド ▼▼▼
     @commands.command()
     async def todo(self, ctx, command: str = 'list', *, task: str = None):
         user_id = ctx.author.id
@@ -110,7 +48,6 @@ class UserCommands(commands.Cog):
             else:
                 await ctx.send('消したいタスクの番号をちゃんと指定しなさいよね！ 例：`!todo done 1`')
 
-    # ▼▼▼ !remember コマンド ▼▼▼
     @commands.command()
     async def remember(self, ctx, *, note: str = None):
         if not note:
@@ -123,7 +60,6 @@ class UserCommands(commands.Cog):
         save_memory(memory)
         await ctx.send(f"ふーん、「{note}」ね。アンタのこと、覚えててやんよ♡")
 
-    # ▼▼▼ !recall コマンド ▼▼▼
     @commands.command()
     async def recall(self, ctx):
         memory = load_memory()
@@ -134,7 +70,6 @@ class UserCommands(commands.Cog):
             notes = "\n".join([f"{i+1}. {n}" for i, n in enumerate(memory['users'][user_id]['notes'])])
             await ctx.send(f"アタシがアンタについて覚えてることリストよ♡\n{notes}")
 
-    # ▼▼▼ !forget コマンド ▼▼▼
     @commands.command()
     async def forget(self, ctx, index_str: str = None):
         if not index_str or not index_str.isdigit():
@@ -150,7 +85,6 @@ class UserCommands(commands.Cog):
         else:
             await ctx.send('その番号の記憶なんて、元からないんだけど？')
 
-    # ▼▼▼ !setname コマンド ▼▼▼
     @commands.command()
     async def setname(self, ctx, *, new_name: str = None):
         if not new_name:
@@ -164,7 +98,6 @@ class UserCommands(commands.Cog):
         save_memory(memory)
         await ctx.send(f"ふん、アンタのこと、これからは「{new_name}」って呼んでやんよ♡ ありがたく思いなさいよね！")
 
-    # ▼▼▼ !myname コマンド ▼▼▼
     @commands.command()
     async def myname(self, ctx):
         memory = load_memory()
@@ -175,7 +108,6 @@ class UserCommands(commands.Cog):
         else:
             await ctx.send(f"アンタ、まだアタシに名前を教えてないじゃない。`!setname [呼ばれたい名前]` でアタシに教えなさいよね！")
 
-    # ▼▼▼ !server_remember コマンド ▼▼▼
     @commands.command()
     async def server_remember(self, ctx, *, note: str = None):
         if not note:
@@ -187,7 +119,6 @@ class UserCommands(commands.Cog):
         save_memory(memory)
         await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
         
-    # ▼▼▼ !server_recall コマンド ▼▼▼
     @commands.command()
     async def server_recall(self, ctx):
         memory = load_memory()
@@ -196,7 +127,6 @@ class UserCommands(commands.Cog):
             await ctx.send(f"サーバーの共有知識リストよ！\n{notes}")
         else:
             await ctx.send("サーバーの共有知識はまだ何もないわよ？")
-
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
