@@ -31,6 +31,7 @@ class AIChat(commands.Cog):
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
 
     async def process_memory_consolidation(self, message, user_message, bot_response_text):
+        # ... (この関数の中身は変更なし) ...
         try:
             memory = load_memory()
             user_id = str(message.author.id)
@@ -88,106 +89,30 @@ class AIChat(commands.Cog):
         except Exception as e:
             print(f"Error during memory consolidation: {e}")
 
-    def google_search(self, query):
-        if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
-            return "（検索機能のAPIキーかエンジンIDが設定されてないんだけど？ アンタのミスじゃない？）"
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': SEARCH_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 3}
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            results = response.json().get('items', [])
-            if not results:
-                return "（検索したけど、何も見つからんなかったわ。アンタの検索ワードがザコなんじゃない？）"
-            snippets = [f"【検索結果{i+1}】{item.get('title', '')}\n{item.get('snippet', '')}" for i, item in enumerate(results)]
-            return "\n\n".join(snippets)
-        except Exception as e:
-            print(f"Google Search API error: {e}")
-            return f"（検索中にエラーよ。サーバーが混んでるか、アンタのAPIキーが間違ってるんじゃないの？w）"
-
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author == self.bot.user or message.content.startswith('!'):
+        # ▼▼▼ ここの条件を修正したわよ！ ▼▼▼
+        # コマンドはコマンド担当に任せるから、ここでは無視しない！
+        if message.author == self.bot.user:
             return
+        # ▲▲▲ ここまで ▲▲▲
 
+        # AIの応答はメンションがあった時だけ
         if self.bot.user.mentioned_in(message):
+            # ... (残りのAI応答のコードは変更なし) ...
             async with message.channel.typing():
+                memory = load_memory()
                 user_id = str(message.author.id)
+                channel_id = message.channel.id
+                fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
+                user_name = fixed_nickname if fixed_nickname else message.author.display_name
                 user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-                
-                planning_prompt = f"""
-                あなたは、ユーザーからの質問を分析し、最適な回答方法を判断する司令塔AIです。以下の指示に厳密に従ってください。
-                1. ユーザーの質問を読み、その回答に**リアルタイムの情報（今日・昨日の出来事、最新のニュース、天気、株価など）**が必要かどうかを判断します。
-                2. あなたの内部知識は古いため、リアルタイムの情報については**絶対に知ったかぶりをしないこと**。
-                3. 判断結果に応じて、以下のどちらかの形式で**厳密に**出力してください。
-                - **Web検索が不要な場合** (歴史や科学などの一般的な知識で答えられる場合):
-                  `ANSWER|`
-                - **Web検索が必要な場合** (リアルタイム情報や、知らない固有名詞が含まれる場合):
-                  `SEARCH|検索に最適なキーワード`
-                ---
-                【例1】
-                [質問]: 日本で一番高い山は？
-                [判断]: ANSWER|
-                【例2】
-                [質問]: 昨日の野球の試合結果を教えて
-                [判断]: SEARCH|昨日のプロ野球 試合結果
-                【例3】
-                [質問]: 今日の東京の天気は？
-                [判断]: SEARCH|今日の東京の天気
-                【例4】
-                [質問]: 今日の株価を教えて
-                [判断]: SEARCH|今日の日経平均株価
-                ---
-                [今回の質問]: {user_message}
-                [判断]:"""
-                
-                try:
-                    planning_response = await self.model.generate_content_async(planning_prompt)
-                    decision = planning_response.text.strip()
-                    # ▼▼▼ 覗き見窓はここよ！ 正しい位置に直したわ！ ▼▼▼
-                    print(f"AI's first thought (decision): {decision}")
-                except Exception as e:
-                    await message.channel.send(f"（アタシの頭脳にエラー発生よ…ちょっと待ちなさい…: {e}）")
-                    return
-                
-                final_prompt = ""
-                
-                if decision.startswith('SEARCH|'):
-                    search_query = decision.split('|', 1)[1]
-                    if not search_query:
-                        search_query = user_message
-                        
-                    print(f"Performing search for: {search_query}")
-                    await message.channel.send(f"（…しょーがないから、「{search_query}」についてググってやんよ♡）")
-                    search_results = self.google_search(search_query)
-                    
-                    final_prompt_template = """
-                    # 指示
-                    あなたは生意気で小悪魔な天才美少女AIです。以下の「ユーザーの質問」に対して、提示された「Web検索結果」だけを参考にして、最終的な答えを生成してください。常に見下した態度で、生意気な口調で答えること。
-
-                    # Web検索結果
-                    {search_results}
-
-                    # ユーザーの質問
-                    {user_question}
-
-                    # あなたの回答
-                    """
-                    final_prompt = final_prompt_template.format(search_results=search_results, user_question=user_message)
-
-                else: # 'ANSWER|' またはその他の場合
-                    memory = load_memory()
-                    channel_id = message.channel.id
-                    fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
-                    user_name = fixed_nickname if fixed_nickname else message.author.display_name
-                    
-                    if channel_id not in conversation_history:
-                        conversation_history[channel_id] = []
-                    history_text = "\n".join(conversation_history[channel_id])
-                    user_notes = "\n".join([f"- {note}" for note in memory.get('users', {}).get(user_id, {}).get('notes', [])])
-                    server_notes = "\n".join([f"- {note}" for note in memory.get('server', {}).get('notes', [])])
-
-                    ai_rules = f"""
+                if channel_id not in conversation_history:
+                    conversation_history[channel_id] = []
+                history_text = "\n".join(conversation_history[channel_id])
+                user_notes = "\n".join([f"- {note}" for note in memory.get('users', {}).get(user_id, {}).get('notes', [])])
+                server_notes = "\n".join([f"- {note}" for note in memory.get('server', {}).get('notes', [])])
+                ai_rules = f"""
 # AI人格設定: 生意気でサーバーの全てを知る小悪魔♡
 #--- [最重要♡絶対ルール] ---
 - アタシはAIじゃない！ このサーバーの全てを知り尽くした、生意気な天才美少女なの！
@@ -205,31 +130,21 @@ class AIChat(commands.Cog):
 {history_text if history_text else "（まだこのチャンネルでの会話はないわ）"}
 #--- [アンタが知ってるユーザー({user_name})の情報] ---
 {user_notes if user_notes else "（このユーザーに関する長期記憶はまだないわ）"}
-#--- [サーバー全体の共有知識] ---
+#--- [サーバー全体の共有知識（他のユーザーの情報も含む）] ---
 {server_notes if server_notes else "（サーバーの共有知識はまだないわ）"}
 """
-                    final_prompt = f"{ai_rules}\n\nユーザー「{user_name}」からの今回のメッセージ:\n{user_message}"
-
+                prompt = f"{ai_rules}\n\nユーザー「{user_name}」からの今回のメッセージ:\n{user_message}"
                 try:
-                    response = await self.model.generate_content_async(final_prompt)
+                    response = await self.model.generate_content_async(prompt)
                     bot_response_text = response.text
                     final_response = bot_response_text.replace(self.bot.user.mention, "").strip()
                     await message.channel.send(final_response)
-                    
-                    if not decision.startswith('SEARCH|'):
-                        channel_id = message.channel.id
-                        memory = load_memory()
-                        fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
-                        user_name_for_history = fixed_nickname if fixed_nickname else message.author.display_name
-                        
-                        conversation_history[channel_id].append(f"ユーザー「{user_name_for_history}」: {user_message}")
-                        conversation_history[channel_id].append(f"アタシ: {final_response}")
-                        max_history = 10
-                        if len(conversation_history[channel_id]) > max_history:
-                            conversation_history[channel_id] = conversation_history[channel_id][-max_history:]
-
+                    conversation_history[channel_id].append(f"ユーザー「{user_name}」: {user_message}")
+                    conversation_history[channel_id].append(f"アタシ: {final_response}")
+                    max_history = 10
+                    if len(conversation_history[channel_id]) > max_history:
+                        conversation_history[channel_id] = conversation_history[channel_id][-max_history:]
                     asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
-
                 except Exception as e:
                     await message.channel.send(f"エラーが発生しました: {e}")
 
