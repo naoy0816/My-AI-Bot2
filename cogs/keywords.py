@@ -33,5 +33,9 @@ class Keywords(commands.Cog):
         elif 'お腹すいた' in content or 'はらへった' in content:
             await message.channel.send('自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？')
 
+        # ▼▼▼ この一行が超重要！▼▼▼
+        # on_message を使っても、他のコマンドがちゃんと動くようにするおまじない
+        await self.bot.process_commands(message)
+
 async def setup(bot):
     await bot.add_cog(Keywords(bot))
