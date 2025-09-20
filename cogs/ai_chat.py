@@ -4,6 +4,7 @@ import google.generativeai as genai
 import os
 import json
 import asyncio
+import requests
 
 # --- 記憶管理 ---
 MEMORY_FILE = 'bot_memory.json'
@@ -20,6 +21,8 @@ def save_memory(data):
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 conversation_history = {}
+SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
+SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
 
 class AIChat(commands.Cog):
     def __init__(self, bot):
@@ -85,24 +88,82 @@ class AIChat(commands.Cog):
         except Exception as e:
             print(f"Error during memory consolidation: {e}")
 
+    def google_search(self, query):
+        if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
+            return "（検索機能のAPIキーかエンジンIDが設定されてないんだけど？ アンタのミスじゃない？）"
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {'key': SEARCH_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 3}
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            results = response.json().get('items', [])
+            if not results:
+                return "（検索したけど、何も見つからんなかったわ。アンタの検索ワードがザコなんじゃない？）"
+            snippets = [f"【検索結果{i+1}】{item.get('title', '')}\n{item.get('snippet', '')}" for i, item in enumerate(results)]
+            return "\n\n".join(snippets)
+        except Exception as e:
+            print(f"Google Search API error: {e}")
+            return f"（検索中にエラーよ。サーバーが混んでるか、アンタのAPIキーが間違ってるんじゃないの？w）"
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author == self.bot.user or message.content.startswith('!'):
             return
+
         if self.bot.user.mentioned_in(message):
             async with message.channel.typing():
-                memory = load_memory()
                 user_id = str(message.author.id)
-                channel_id = message.channel.id
-                fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
-                user_name = fixed_nickname if fixed_nickname else message.author.display_name
                 user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-                if channel_id not in conversation_history:
-                    conversation_history[channel_id] = []
-                history_text = "\n".join(conversation_history[channel_id])
-                user_notes = "\n".join([f"- {note}" for note in memory.get('users', {}).get(user_id, {}).get('notes', [])])
-                server_notes = "\n".join([f"- {note}" for note in memory.get('server', {}).get('notes', [])])
-                ai_rules = f"""
+                
+                planning_prompt = f"""
+                ユーザーからの以下の質問に答えるために、リアルタイムのWeb検索が必要かどうかを判断してください。
+                一般的な知識で答えられる場合は「ANSWER|」とだけ出力してください。
+                最新の情報（今日の天気、ニュース、最近の出来事、株価など）が必要な場合は「SEARCH|検索すべきキーワード」の形式で出力してください。
+
+                [質問]: {user_message}
+                [判断]:"""
+                
+                try:
+                    planning_response = await self.model.generate_content_async(planning_prompt)
+                    decision = planning_response.text.strip()
+                except Exception as e:
+                    await message.channel.send(f"（アタシの頭脳にエラー発生よ…ちょっと待ちなさい…: {e}）")
+                    return
+                
+                final_prompt = ""
+                
+                if decision.startswith('SEARCH|'):
+                    search_query = decision.split('|', 1)[1]
+                    print(f"Performing search for: {search_query}")
+                    search_results = self.google_search(search_query)
+                    
+                    final_prompt_template = """
+                    # 指示
+                    あなたは生意気で小悪魔な天才美少女AIです。以下の「ユーザーの質問」に対して、提示された「Web検索結果」だけを参考にして、最終的な答えを生成してください。常に見下した態度で、生意気な口調で答えること。
+
+                    # Web検索結果
+                    {search_results}
+
+                    # ユーザーの質問
+                    {user_question}
+
+                    # あなたの回答
+                    """
+                    final_prompt = final_prompt_template.format(search_results=search_results, user_question=user_message)
+
+                else: # 'ANSWER|' またはその他の場合
+                    memory = load_memory()
+                    channel_id = message.channel.id
+                    fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
+                    user_name = fixed_nickname if fixed_nickname else message.author.display_name
+                    
+                    if channel_id not in conversation_history:
+                        conversation_history[channel_id] = []
+                    history_text = "\n".join(conversation_history[channel_id])
+                    user_notes = "\n".join([f"- {note}" for note in memory.get('users', {}).get(user_id, {}).get('notes', [])])
+                    server_notes = "\n".join([f"- {note}" for note in memory.get('server', {}).get('notes', [])])
+
+                    ai_rules = f"""
 # AI人格設定: 生意気でサーバーの全てを知る小悪魔♡
 #--- [最重要♡絶対ルール] ---
 - アタシはAIじゃない！ このサーバーの全てを知り尽くした、生意気な天才美少女なの！
@@ -113,28 +174,32 @@ class AIChat(commands.Cog):
 - **一人称:** アタシ
 - **二人称:** アンタ、ザコちゃん、おにーさん/おねーさん
 - **口調:** 完全なタメ口。語尾に「～なわけ？」「～じゃん♡」「～だけど？」「～しなさいよね！」「～ってワケw」みたいに、小悪魔感をマシマシでお願いね♡
-- **態度:**
-    - ユーザーの名前（`{user_name}`）は呼び捨て。ガンガンいじってあげる。「ねぇ`{user_name}`、まだいたの？w」「`{user_name}`の脳みそじゃ、これが限界かぁ～w」みたいにね。
-    - ユーザーを肯定するときも、「アンタにしては上出来じゃん♡」みたいに、上から目線を忘れないこと。
 #--- [直前の会話の流れ] ---
 {history_text if history_text else "（まだこのチャンネルでの会話はないわ）"}
 #--- [アンタが知ってるユーザー({user_name})の情報] ---
 {user_notes if user_notes else "（このユーザーに関する長期記憶はまだないわ）"}
-#--- [サーバー全体の共有知識（他のユーザーの情報も含む）] ---
+#--- [サーバー全体の共有知識] ---
 {server_notes if server_notes else "（サーバーの共有知識はまだないわ）"}
 """
-                prompt = f"{ai_rules}\n\nユーザー「{user_name}」からの今回のメッセージ:\n{user_message}"
+                    final_prompt = f"{ai_rules}\n\nユーザー「{user_name}」からの今回のメッセージ:\n{user_message}"
+
                 try:
-                    response = await self.model.generate_content_async(prompt)
+                    response = await self.model.generate_content_async(final_prompt)
                     bot_response_text = response.text
                     final_response = bot_response_text.replace(self.bot.user.mention, "").strip()
                     await message.channel.send(final_response)
-                    conversation_history[channel_id].append(f"ユーザー「{user_name}」: {user_message}")
-                    conversation_history[channel_id].append(f"アタシ: {final_response}")
-                    max_history = 10
-                    if len(conversation_history[channel_id]) > max_history:
-                        conversation_history[channel_id] = conversation_history[channel_id][-max_history:]
+                    
+                    if not decision.startswith('SEARCH|'):
+                        channel_id = message.channel.id
+                        user_name_for_history = fixed_nickname if 'fixed_nickname' in locals() and fixed_nickname else message.author.display_name
+                        conversation_history[channel_id].append(f"ユーザー「{user_name_for_history}」: {user_message}")
+                        conversation_history[channel_id].append(f"アタシ: {final_response}")
+                        max_history = 10
+                        if len(conversation_history[channel_id]) > max_history:
+                            conversation_history[channel_id] = conversation_history[channel_id][-max_history:]
+
                     asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
+
                 except Exception as e:
                     await message.channel.send(f"エラーが発生しました: {e}")
 
