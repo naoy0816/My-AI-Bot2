@@ -35,7 +35,7 @@ class DailyTasks(commands.Cog):
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
         # ▼▼▼ 実行したい時間をここで設定するのよ！ （例は朝8時00分）▼▼▼
-        target_time = datetime.time(hour=8, minute=0, tzinfo=jst)
+        target_time = datetime.time(hour=6, minute=0, tzinfo=jst)
         self.daily_report.start(target_time)
         # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
