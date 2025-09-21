@@ -1,17 +1,19 @@
+# bot.py (修正後)
 import discord
 from discord.ext import commands
 import os
 
 # ▼▼▼【重要】キーは環境変数から読み込む！▼▼▼
-# PCでテストする時は、'YOUR_DISCORD_TOKEN' の部分をアンタの聖遺物に書き換えてもいいわ
 DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN', 'YOUR_DISCORD_TOKEN')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', 'YOUR_GOOGLE_API_KEY')
 # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-# ボットの基本設定
+# ボットの基本設定（Intentsを強化）
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
+intents.guilds = True
+intents.members = True # メンバー情報を取得できるようにする
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # 起動時にCog（機能別ファイル）を読み込む
