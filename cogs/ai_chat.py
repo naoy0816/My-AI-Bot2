@@ -248,4 +248,38 @@ class AIChat(commands.Cog):
 #--- [直前の会話の流れ] ---
 {history_text if history_text else "（まだこのチャンネルでの会話はないわ）"}
 #--- [この会話に特に関連しそうな、アンタが知ってるユーザー({user_name})の情報] ---
-{user_notes_text if user_notes_text else "（この会話に関連する長期記憶はないみたい
+{user_notes_text if user_notes_text else "（この会話に関連する長期記憶はないみたい）"}
+#--- [この会話に特に関連しそうな、サーバー全体の共有知識] ---
+{server_notes_text if server_notes_text else "（この会話に関連するサーバーの長期記憶はないみたい）"}
+"""
+                    final_prompt = f"{ai_rules}\n\nユーザー「{user_name}」からの今回のメッセージ:\n{user_message}"
+
+                try:
+                    # (応答生成と会話履歴の保存はほぼ変更なし)
+                    response = await self.chat_model.generate_content_async(final_prompt)
+                    # ... (以降の処理は既存のものを流用) ...
+                    bot_response_text = response.text
+                    final_response = bot_response_text.replace(self.bot.user.mention, "").strip()
+                    await message.channel.send(final_response)
+                    
+                    if not decision.startswith('SEARCH|'):
+                        channel_id = message.channel.id
+                        memory = load_memory()
+                        fixed_nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
+                        user_name_for_history = fixed_nickname if fixed_nickname else message.author.display_name
+                        
+                        conversation_history[channel_id].append(f"ユーザー「{user_name_for_history}」: {user_message}")
+                        conversation_history[channel_id].append(f"アタシ: {final_response}")
+                        max_history = 10
+                        if len(conversation_history[channel_id]) > max_history:
+                            conversation_history[channel_id] = conversation_history[channel_id][-max_history:]
+
+                    asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
+
+                except Exception as e:
+                    await message.channel.send(f"エラーが発生しました: {e}")
+        
+        await self.bot.process_commands(message)
+
+async def setup(bot):
+    await bot.add_cog(AIChat(bot))
