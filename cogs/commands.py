@@ -13,6 +13,7 @@ def load_memory():
         with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
+        # 新しい記憶構造に対応
         return {"users": {}, "server": {"notes": []}}
 
 def save_memory(data):
@@ -43,7 +44,7 @@ class UserCommands(commands.Cog):
             response.raise_for_status()
             results = response.json().get('items', [])
             if not results:
-                return "（検索したけど、何も見つかんなかったわ。アンタの検索ワードがザコなんじゃない？）"
+                return "（検索したけど、何も見つからんなかったわ。アンタの検索ワードがザコなんじゃない？）"
             
             snippets = [f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in results]
             return "\n\n".join(snippets)
@@ -144,43 +145,67 @@ class UserCommands(commands.Cog):
             else:
                 await ctx.send('消したいタスクの番号をちゃんと指定しなさいよね！ 例：`!todo done 1`')
 
-    # ▼▼▼ !remember コマンド ▼▼▼
+    # ▼▼▼ !remember コマンド (ベクトル化対応) ▼▼▼
     @commands.command()
     async def remember(self, ctx, *, note: str = None):
         if not note:
             await ctx.send("はぁ？ アタシに何を覚えてほしいわけ？ 内容を書きなさいよね！")
             return
+        
+        # ai_chatのcogを取得して、その中のembedding関数を使う
+        ai_chat_cog = self.bot.get_cog('AIChat')
+        if not ai_chat_cog:
+            await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）")
+            return
+
+        embedding = await ai_chat_cog._get_embedding(note)
+        if embedding is None:
+            await ctx.send("（なんかエラーで、アンタの言葉を脳に刻み込めなかったわ…）")
+            return
+
         memory = load_memory()
         user_id = str(ctx.author.id)
-        if user_id not in memory['users']: memory['users'][user_id] = {'notes': []}
-        memory['users'][user_id]['notes'].append(note)
-        save_memory(memory)
-        await ctx.send(f"ふーん、「{note}」ね。アンタのこと、覚えててやんよ♡")
+        if user_id not in memory['users']: 
+            memory['users'][user_id] = {'notes': []}
+        
+        # 同じ内容の記憶がなければ追加
+        if not any(n['text'] == note for n in memory['users'][user_id]['notes']):
+            new_note = {'text': note, 'embedding': embedding}
+            memory['users'][user_id]['notes'].append(new_note)
+            save_memory(memory)
+            await ctx.send(f"ふーん、「{note}」ね。アンタのこと、覚えててやんよ♡")
+        else:
+            await ctx.send("それ、もう知ってるし。同じこと何度も言わせないでくれる？")
 
-    # ▼▼▼ !recall コマンド ▼▼▼
+    # ▼▼▼ !recall コマンド (ベクトル化対応) ▼▼▼
     @commands.command()
     async def recall(self, ctx):
         memory = load_memory()
         user_id = str(ctx.author.id)
-        if user_id not in memory['users'] or not memory['users'].get('notes'):
+        user_notes = memory.get('users', {}).get(user_id, {}).get('notes', [])
+        
+        if not user_notes:
             await ctx.send('アンタに関する記憶は、まだ何もないけど？w')
         else:
-            notes = "\n".join([f"{i+1}. {n}" for i, n in enumerate(memory['users'][user_id]['notes'])])
-            await ctx.send(f"アタシがアンタについて覚えてることリストよ♡\n{notes}")
+            # user_notesはオブジェクトのリストなので、textだけ取り出す
+            notes_text = "\n".join([f"{i+1}. {n['text']}" for i, n in enumerate(user_notes)])
+            await ctx.send(f"アタシがアンタについて覚えてることリストよ♡\n{notes_text}")
 
-    # ▼▼▼ !forget コマンド ▼▼▼
+    # ▼▼▼ !forget コマンド (ベクトル化対応) ▼▼▼
     @commands.command()
     async def forget(self, ctx, index_str: str = None):
         if not index_str or not index_str.isdigit():
             await ctx.send('消したい記憶の番号をちゃんと指定しなさいよね！ 例：`!forget 1`')
             return
+            
         memory = load_memory()
         user_id = str(ctx.author.id)
         index = int(index_str) - 1
+        
         if user_id in memory['users'] and 0 <= index < len(memory['users'][user_id].get('notes', [])):
             removed = memory['users'][user_id]['notes'].pop(index)
             save_memory(memory)
-            await ctx.send(f"「{removed}」ね。はいはい、アンタの記憶から消してあげたわよ。")
+            await ctx.send(f"「{removed['text']}」ね。はいはい、アンタの記憶から消してあげたわよ。")
         else:
             await ctx.send('その番号の記憶なんて、元からないんだけど？')
 
@@ -209,24 +234,41 @@ class UserCommands(commands.Cog):
         else:
             await ctx.send(f"アンタ、まだアタシに名前を教えてないじゃない。`!setname [呼ばれたい名前]` でアタシに教えなさいよね！")
 
-    # ▼▼▼ !server_remember コマンド ▼▼▼
+    # ▼▼▼ !server_remember コマンド (ベクトル化対応) ▼▼▼
     @commands.command()
     async def server_remember(self, ctx, *, note: str = None):
         if not note:
             await ctx.send("サーバーの共有知識として何を覚えさせたいわけ？ 内容を書きなさい！")
             return
+
+        ai_chat_cog = self.bot.get_cog('AIChat')
+        if not ai_chat_cog:
+            await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）")
+            return
+
+        embedding = await ai_chat_cog._get_embedding(note)
+        if embedding is None:
+            await ctx.send("（なんかエラーで、サーバーの知識を脳に刻み込めなかったわ…）")
+            return
+
         memory = load_memory()
         if 'server' not in memory: memory['server'] = {'notes': []}
-        memory['server']['notes'].append(note)
-        save_memory(memory)
-        await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
         
-    # ▼▼▼ !server_recall コマンド ▼▼▼
+        if not any(n['text'] == note for n in memory['server']['notes']):
+            new_note = {'text': note, 'embedding': embedding}
+            memory['server']['notes'].append(new_note)
+            save_memory(memory)
+            await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
+        else:
+            await ctx.send("それ、サーバーの皆もう知ってるし。しつこいんだけど？")
+        
+    # ▼▼▼ !server_recall コマンド (ベクトル化対応) ▼▼▼
     @commands.command()
     async def server_recall(self, ctx):
         memory = load_memory()
-        if memory.get('server') and memory['server'].get('notes'):
-            notes = "\n".join([f"- {note}" for note in memory['server']['notes']])
+        server_notes = memory.get('server', {}).get('notes', [])
+        if server_notes:
+            notes = "\n".join([f"- {note['text']}" for note in server_notes])
             await ctx.send(f"サーバーの共有知識リストよ！\n{notes}")
         else:
             await ctx.send("サーバーの共有知識はまだ何もないわよ？")
