@@ -21,8 +21,10 @@ def save_memory(data):
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 conversation_history = {}
-SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
-SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
+# ▼▼▼ エラーに合わせて環境変数名を修正したわよ！ ▼▼▼
+SEARCH_API_KEY = os.getenv('SEARCH_API_KEY')
+SEARCH_ENGINE_ID = os.getenv('SEARCH_ENGINE_ID')
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 class AIChat(commands.Cog):
     def __init__(self, bot):
@@ -223,7 +225,6 @@ class AIChat(commands.Cog):
                 except Exception as e:
                     await message.channel.send(f"エラーが発生しました: {e}")
         
-        # ▼▼▼ 社内ルールを修正したわよ！ ▼▼▼
         await self.bot.process_commands(message)
 
 async def setup(bot):
