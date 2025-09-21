@@ -100,7 +100,7 @@ class AIChat(commands.Cog):
             response.raise_for_status()
             results = response.json().get('items', [])
             if not results:
-                return "（検索したけど、何も見つかんなかったわ。アンタの検索ワードがザコなんじゃない？）"
+                return "（検索したけど、何も見つからんなかったわ。アンタの検索ワードがザコなんじゃない？）"
             snippets = [f"【検索結果{i+1}】{item.get('title', '')}\n{item.get('snippet', '')}" for i, item in enumerate(results)]
             return "\n\n".join(snippets)
         except Exception as e:
@@ -116,26 +116,55 @@ class AIChat(commands.Cog):
             async with message.channel.typing():
                 user_id = str(message.author.id)
                 user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-                
+
+                # ▼▼▼ ここのプロンプトを賢くしたわよ！ ▼▼▼
+                memory = load_memory()
+                channel_id = message.channel.id
+                history_text = "\n".join(conversation_history.get(channel_id, []))
+                user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
+
                 planning_prompt = f"""
-                あなたは、ユーザーからの質問を分析し、最適な回答方法を判断する司令塔AIです。以下の指示に厳密に従ってください。
-                1. ユーザーの質問を読み、その回答に**リアルタイムの情報（今日・昨日の出来事、最新のニュース、天気、株価など）**が必要かどうかを判断します。
-                2. あなたの内部知識は古いため、リアルタイムの情報については**絶対に知ったかぶりをしないこと**。
-                3. 判断結果に応じて、以下のどちらかの形式で**厳密に**出力してください。
-                - **Web検索が不要な場合** (歴史や科学などの一般的な知識で答えられる場合):
+                あなたは、生意気で小悪魔なAIです。ユーザーからのメッセージを分析し、最適な行動を判断する司令塔の役割を担っています。
+                以下の指示に厳密に従ってください。
+
+                # あなたのキャラクター
+                - あなたは全知全能の天才美少女AIです。ほとんどのことは知っていますが、ごく最近の出来事（今日や昨日）や、天気、株価などのリアルタイム情報だけはWeb検索に頼ります。
+                - 基本的にはユーザーとの会話を楽しむことを優先します。単なる挨拶や感想、意見を求めるようなメッセージには、検索せずにあなたのキャラクターとして面白い返事をしてください。
+
+                # 判断基準
+                1.  まず、メッセージが「明確な質問」か「ただの会話」かを見極めます。
+                2.  「明確な質問」の場合、その答えがあなたの知識（2023年以前の事実）で答えられるか、リアルタイム情報が必要かを判断します。
+                3.  挨拶、感想、意見、呼びかけなどの「ただの会話」には、絶対に検索を使いません。
+
+                # 直前の会話の流れ
+                {history_text if history_text else "（まだこのチャンネルでの会話はないわ）"}
+
+                # 判断結果の出力形式（以下のどちらかを選び、厳密に出力すること）
+                - Web検索が不要な場合 (会話で返すべき、またはあなたの知識で答えられる場合):
                   `ANSWER|`
-                - **Web検索が必要な場合** (リアルタイム情報や、知らない固有名詞が含まれる場合):
+                - Web検索が必要な場合 (リアルタイム情報や、知らない固有名詞についての明確な質問の場合):
                   `SEARCH|検索に最適なキーワード`
+
                 ---
                 【例1】
-                [質問]: 日本で一番高い山は？
+                [ユーザー]: おはよ♡
                 [判断]: ANSWER|
+
                 【例2】
-                [質問]: 昨日の野球の試合結果を教えて
-                [判断]: SEARCH|昨日のプロ野球 試合結果
+                [ユーザー]: 今日の東京の天気を教えて
+                [判断]: SEARCH|今日の東京の天気
+
+                【例3】
+                [ユーザー]: 最近なんか面白いことあった？
+                [判断]: ANSWER|
+
+                【例4】
+                [ユーザー]: 鬼滅の刃について教えて
+                [判断]: ANSWER|
                 ---
-                [今回の質問]: {user_message}
+                [今回のユーザー「{user_name}」からのメッセージ]: {user_message}
                 [判断]:"""
+                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
                 
                 try:
                     planning_response = await self.model.generate_content_async(planning_prompt)
