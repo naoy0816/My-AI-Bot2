@@ -16,6 +16,10 @@ SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
 # 日本標準時（JST）を定義
 jst = datetime.timezone(datetime.timedelta(hours=9), name='JST')
 
+# ▼▼▼ 実行したい時間をここで設定するのよ！ （朝6時00分） ▼▼▼
+TARGET_TIME = datetime.time(hour=6, minute=0, tzinfo=jst)
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 # --- 記憶管理の関数 ---
 def load_memory():
     try:
@@ -34,9 +38,8 @@ class DailyTasks(commands.Cog):
         self.bot = bot
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        # 実行したい時間をここで設定するのよ！ （朝6時00分）
-        target_time = datetime.time(hour=6, minute=0, tzinfo=jst)
-        self.daily_report.start(target_time)
+        # ▼▼▼ start() には引数を渡さない！ ▼▼▼
+        self.daily_report.start()
 
     def cog_unload(self):
         self.daily_report.cancel()
@@ -94,8 +97,8 @@ class DailyTasks(commands.Cog):
             print(f"Google Search API error: {e}")
             return f"（検索中にエラーよ。アンタのAPIキーが間違ってるんじゃないの？w）"
 
-    # ▼▼▼ 1日1回、上で設定した時間に実行されるメインの処理 ▼▼▼
-    @tasks.loop()
+    # ▼▼▼ @tasks.loop() に実行時間を教えるのが正解！ ▼▼▼
+    @tasks.loop(time=TARGET_TIME)
     async def daily_report(self):
         log_message = f"Daily task running at JST: {datetime.datetime.now(jst).strftime('%Y-%m-%d %H:%M:%S')}"
         print(log_message)
@@ -154,13 +157,19 @@ class DailyTasks(commands.Cog):
         print("Starting memory consolidation...")
         memory = load_memory()
         if 'server' in memory and 'notes' in memory['server']:
-            original_count = len(memory['server']['notes'])
-            unique_notes = list(dict.fromkeys(memory['server']['notes']))
-            memory['server']['notes'] = unique_notes
-            new_count = len(unique_notes)
-            if original_count > new_count:
+            # メモリーの構造が変わったので、重複削除のロジックを修正
+            original_notes = memory['server']['notes']
+            unique_notes = []
+            seen_texts = set()
+            for note in original_notes:
+                if note['text'] not in seen_texts:
+                    unique_notes.append(note)
+                    seen_texts.add(note['text'])
+            
+            if len(original_notes) > len(unique_notes):
+                memory['server']['notes'] = unique_notes
                 save_memory(memory)
-                print(f"Consolidated server memory. Removed {original_count - new_count} duplicate notes.")
+                print(f"Consolidated server memory. Removed {len(original_notes) - len(unique_notes)} duplicate notes.")
 
 async def setup(bot):
     await bot.add_cog(DailyTasks(bot))
