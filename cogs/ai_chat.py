@@ -9,7 +9,13 @@ import requests
 import numpy as np
 
 # --- (記憶管理の関数は変更なし) ---
-MEMORY_FILE = 'bot_memory.json'
+# cogs/ai_chat.py, cogs/commands.py, cogs/tasks.py の冒頭部分
+import os # os をインポートするのを忘れないで！
+
+# RailwayのVolumeに保存するためのパス設定
+# ローカルでテストする時は、今まで通り 'bot_memory.json' になるわ
+DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
+MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 # ... (load_memory, save_memory はそのまま) ...
 def load_memory():
     try:
