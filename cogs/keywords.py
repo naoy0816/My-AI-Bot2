@@ -7,9 +7,11 @@ class Keywords(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
+        # 自分自身のメッセージには反応しない
         if message.author == self.bot.user:
             return
 
+        # コマンドでもメンションでもない、ただの雑談の場合だけキーワードをチェックする
         if not message.content.startswith('!') and not self.bot.user.mentioned_in(message):
             content = message.content
             if 'おはよう' in content:
@@ -33,7 +35,9 @@ class Keywords(commands.Cog):
             elif 'お腹すいた' in content or 'はらへった' in content:
                 await message.channel.send('自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？')
 
-        await self.bot.process_commands(message)
+        # ▼▼▼【重要】ここにあった余計なコマンド処理命令を消したわよ！▼▼▼
+        # await self.bot.process_commands(message)
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 async def setup(bot):
     await bot.add_cog(Keywords(bot))
