@@ -1,0 +1,9 @@
+# .gitignore
+
+# Python
+__pycache__/
+*.pyc
+
+# 記憶ファイル
+bot_memory.json
+
