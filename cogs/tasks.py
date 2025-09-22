@@ -9,7 +9,13 @@ import google.generativeai as genai
 # --- APIキーとチャンネルIDは、環境変数から読み込む ---
 NEWS_API_KEY = os.getenv('WORLD_NEWS_API_KEY')
 NOTICE_CHANNEL_ID = int(os.getenv('NOTICE_CHANNEL_ID', 0))
-MEMORY_FILE = 'bot_memory.json'
+# cogs/ai_chat.py, cogs/commands.py, cogs/tasks.py の冒頭部分
+import os # os をインポートするのを忘れないで！
+
+# RailwayのVolumeに保存するためのパス設定
+# ローカルでテストする時は、今まで通り 'bot_memory.json' になるわ
+DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
+MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
 
