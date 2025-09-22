@@ -23,10 +23,8 @@ def save_memory(data):
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 conversation_history = {}
-# ▼▼▼【重要】環境変数名を統一したわよ！▼▼▼
 SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
-# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 class AIChat(commands.Cog):
     def __init__(self, bot):
@@ -123,9 +121,11 @@ class AIChat(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
+        # 自分自身のメッセージや、コマンド実行者以外のメッセージは無視
         if message.author == self.bot.user:
             return
 
+        # メンションされた時の会話処理
         if self.bot.user.mentioned_in(message):
             async with message.channel.typing():
                 user_id = str(message.author.id)
@@ -200,6 +200,11 @@ class AIChat(commands.Cog):
                     asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
                 except Exception as e:
                     await message.channel.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
+        
+        # ▼▼▼【重要】ここにコマンド処理命令を復活させたわ！▼▼▼
+        # これで、メンション以外のメッセージがコマンドかどうか、ちゃんとチェックしてあげる！
+        await self.bot.process_commands(message)
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 async def setup(bot):
     await bot.add_cog(AIChat(bot))
