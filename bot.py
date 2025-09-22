@@ -1,4 +1,4 @@
-# bot.py (修正後)
+# bot.py (最終修正版)
 import discord
 from discord.ext import commands
 import os
@@ -8,12 +8,12 @@ DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN', 'YOUR_DISCORD_TOKEN')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', 'YOUR_GOOGLE_API_KEY')
 # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-# ボットの基本設定（Intentsを強化）
+# ボットの基本設定
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 intents.guilds = True
-intents.members = True # メンバー情報を取得できるようにする
+intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # 起動時にCog（機能別ファイル）を読み込む
@@ -22,7 +22,8 @@ async def on_ready():
     print(f'Bot logged in as {bot.user}')
     print('------')
     for filename in os.listdir('./cogs'):
-        if filename.endswith('.py'):
+        # ▼▼▼ keywords.py を読み込まないように修正 ▼▼▼
+        if filename.endswith('.py') and filename != 'keywords.py':
             try:
                 await bot.load_extension(f'cogs.{filename[:-3]}')
                 print(f'Loaded cog: {filename}')
