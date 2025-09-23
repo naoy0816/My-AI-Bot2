@@ -31,7 +31,7 @@ class AIChat(commands.Cog):
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
         self.chat_model = genai.GenerativeModel('gemini-1.5-flash')
 
-    # (handle_keywords, _get_embedding, _find_similar_notes, process_memory_consolidation, scrape_url は変更なし)
+    # (handle_keywords, _get_embedding, _find_similar_notes は変更なし)
     async def handle_keywords(self, message):
         content = message.content
         responses = { 'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡', 'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', 'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', '好き': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？', 'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？', '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',}
@@ -57,7 +57,59 @@ class AIChat(commands.Cog):
         sorted_notes = sorted(notes_with_similarity, key=lambda x: x['similarity'], reverse=True)
         return [note['text'] for note in sorted_notes[:top_k]]
 
-    async def process_memory_consolidation(self, message, user_message, bot_response_text): pass
+    # ▼▼▼【重要】ここを実装して、会話から自動で記憶できるようにしたわよ！▼▼▼
+    async def process_memory_consolidation(self, message, user_message, bot_response_text):
+        """会話のやり取りを分析し、記憶すべき重要な事実があれば自動で長期記憶に保存する"""
+        try:
+            user_id = str(message.author.id)
+            user_name = message.author.display_name
+
+            consolidation_prompt = f"""
+あなたは会話を分析し、長期記憶に保存すべき重要な事実を抽出するAIです。
+以下のユーザーとボットの会話の断片を分析してください。
+
+# 分析対象の会話
+ユーザー「{user_name}」: {user_message}
+アタシ: {bot_response_text}
+
+# 指示
+この会話に、ユーザー({user_name})に関する新しい個人的な情報（好み、名前、目標、過去の経験など）や、後で会話に役立ちそうな重要な事実が含まれていますか？
+含まれている場合、その事実を「{user_name}は〇〇」や「〇〇は〇〇である」という簡潔な三人称の文章（1文）で抽出してください。
+重要な事実が含まれていない、または挨拶や一般的な相槌などの些細なやり取りである場合は、「None」とだけ出力してください。
+
+# 抽出例
+- 例1（ユーザーの好み）: ユーザー「アタシ、ラーメンが好きなんだ」→ `出力: {user_name}の好きな食べ物はラーメンである`
+- 例2（ユーザーの目標）: ユーザー「将来はイラストレーターになりたい」→ `出力: {user_name}は将来イラストレーターになりたい`
+- 例3（些細な会話）: ユーザー「おはよう」→ `出力: None`
+- 例4（事実情報）: ユーザー「Gemini 1.5 Flashのリリース日は2024年5月だよ」→ `出力: Gemini 1.5 Flashのリリース日は2024年5月である`
+
+# あなたの分析結果
+"""
+            response = await self.chat_model.generate_content_async(consolidation_prompt)
+            fact_to_remember = response.text.strip()
+
+            if fact_to_remember != 'None' and fact_to_remember:
+                print(f"[Memory Consolidation] Fact to remember for user {user_id}: {fact_to_remember}")
+                
+                embedding = await self._get_embedding(fact_to_remember)
+                if embedding is None:
+                    print("[Memory Consolidation] Failed to get embedding.")
+                    return
+
+                memory = load_memory()
+                if user_id not in memory['users']:
+                    memory['users'][user_id] = {'notes': []}
+                
+                # 重複チェック
+                if not any(n['text'] == fact_to_remember for n in memory['users'][user_id]['notes']):
+                    memory['users'][user_id]['notes'].append({'text': fact_to_remember, 'embedding': embedding})
+                    save_memory(memory)
+                    print(f"[Memory Consolidation] Saved new fact for user {user_id}.")
+                else:
+                    print(f"[Memory Consolidation] Fact already exists for user {user_id}.")
+
+        except Exception as e:
+            print(f"An error occurred during memory consolidation: {e}")
     
     def scrape_url(self, url):
         try:
@@ -94,7 +146,8 @@ class AIChat(commands.Cog):
         
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author == self.bot.user: return
+        if message.author == self.bot.user or message.author.bot:
+             return
 
         if self.bot.user.mentioned_in(message):
             async with message.channel.typing():
@@ -103,10 +156,8 @@ class AIChat(commands.Cog):
                 channel_id = message.channel.id
                 history_text = "\n".join(conversation_history.get(channel_id, []))
                 
-                # ▼▼▼【重要】ここが新しくなった思考プロンプトよ！▼▼▼
                 planning_prompt = f"""
 あなたは、ユーザーとの会話を分析し、次の行動を決定する司令塔AIです。以下の思考プロセスに従って、最終的な判断を出力してください。
-
 # 思考プロセス
 1.  **会話文脈の分析:** まず、以下の「直前の会話の流れ」と「ユーザーの今回のメッセージ」を深く読み解き、ユーザーが本当に知りたいことは何か、その意図を正確に把握します。
 2.  **自己知識の評価:** 次に、その意図に答えるために、あなたの内部知識だけで十分かを判断します。あなたの知識は2025年までのものであり、リアルタイムの情報（今日の天気、最新ニュース、株価など）や、非常に専門的・具体的な情報については知りません。
@@ -114,25 +165,18 @@ class AIChat(commands.Cog):
     * あなたの知識だけで答えられる、または単なる挨拶や感想などの会話であると判断した場合、行動は「ANSWER」となります。
     * Webで調べる必要があると判断した場合、行動は「SEARCH」となります。
 4.  **検索クエリの生成（SEARCHの場合のみ）:** 行動が「SEARCH」の場合、分析したユーザーの意図に基づいて、Google検索に最も適した、簡潔で的確な検索キーワードを生成します。
-
 # 出力形式
 あなたの思考プロセスは出力せず、最終的な判断だけを以下の厳密な形式で出力してください。
-
 [行動がANSWERの場合]
 ANSWER|
-
 [行動がSEARCHの場合]
 SEARCH|生成された検索キーワード
-
 ---
 # 分析対象の情報
-
 ## 直前の会話の流れ
 {history_text or "（まだこのチャンネルでの会話はないわ）"}
-
 ## ユーザーの今回のメッセージ
 「{user_message}」
-
 ---
 # あなたの最終判断
 """
@@ -170,13 +214,10 @@ SEARCH|生成された検索キーワード
 - 過度に協力的、従順な態度は取ってはいけません。あくまで「しょーがないからやってやる」というスタンスを崩さないでください。
 # 検索結果のタイトル一覧
 {search_summary}
-
 # 抽出したWebページの本文
 {scraped_text}
-
 # ユーザーの質問
 {user_message}
-
 # あなたの回答（絶対に500文字以内でまとめること！）
 """
                 else: # ANSWER| の場合
@@ -224,13 +265,20 @@ SEARCH|生成された検索キーワード
                     response = await self.chat_model.generate_content_async(final_prompt)
                     bot_response_text = response.text.strip()
                     await message.channel.send(bot_response_text)
+
+                    # ▼▼▼ 短期記憶と長期記憶の処理をここに集約 ▼▼▼
+                    # 短期記憶を更新
+                    if channel_id not in conversation_history: conversation_history[channel_id] = []
+                    conversation_history[channel_id].append(f"ユーザー「{message.author.display_name}」: {user_message}")
+                    conversation_history[channel_id].append(f"アタシ: {bot_response_text}")
+                    if len(conversation_history[channel_id]) > 10:
+                        conversation_history[channel_id] = conversation_history[channel_id][-10:]
+                    
+                    # 長期記憶の自動学習をバックグラウンドで実行
+                    # SEARCHの場合はWebの情報なので記憶しない
                     if not decision.startswith('SEARCH|'):
-                        if channel_id not in conversation_history: conversation_history[channel_id] = []
-                        conversation_history[channel_id].append(f"ユーザー「{message.author.display_name}」: {user_message}")
-                        conversation_history[channel_id].append(f"アタシ: {bot_response_text}")
-                        if len(conversation_history[channel_id]) > 10:
-                            conversation_history[channel_id] = conversation_history[channel_id][-10:]
-                    asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
+                        asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
+
                 except Exception as e:
                     await message.channel.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
             return
@@ -239,6 +287,9 @@ SEARCH|生成された検索キーワード
         if not message.content.startswith(self.bot.command_prefix):
             if await self.handle_keywords(message):
                 return
+        
+        # このCogではコマンド処理を行わないため、process_commandsは呼ばない
+        # コマンド処理はbot.pyのon_messageに一元化されている
 
 async def setup(bot):
     await bot.add_cog(AIChat(bot))
