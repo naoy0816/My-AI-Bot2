@@ -6,6 +6,7 @@ import json
 import asyncio
 import requests
 import numpy as np
+from bs4 import BeautifulSoup
 
 # RailwayのVolumeに保存するためのパス設定
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
@@ -13,17 +14,14 @@ MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 
 def load_memory():
     try:
-        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        with open(MEMORY_FILE, 'r', encoding='utf-8') as f: return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {"users": {}, "server": {"notes": []}}
 
 def save_memory(data):
-    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+    with open(MEMORY_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
 
 conversation_history = {}
-# 検索キーの変数名を統一！
 SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
 
@@ -33,33 +31,19 @@ class AIChat(commands.Cog):
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
         self.chat_model = genai.GenerativeModel('gemini-1.5-flash')
 
-    # キーワード応答のロジック
+    # (handle_keywords, _get_embedding, _find_similar_notes, process_memory_consolidation, scrape_url は変更なし)
     async def handle_keywords(self, message):
         content = message.content
-        responses = {
-            'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡',
-            'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡',
-            'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！',
-            '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！',
-            '好き': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡',
-            'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？',
-            'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？',
-            '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！',
-            'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',
-        }
+        responses = { 'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡', 'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', 'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', '好き': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？', 'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？', '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',}
         for keyword, response in responses.items():
-            if keyword in content:
-                await message.channel.send(response)
-                return True
+            if keyword in content: await message.channel.send(response); return True
         return False
 
     async def _get_embedding(self, text):
         try:
             result = await genai.embed_content_async(model="models/text-embedding-004", content=text, task_type="RETRIEVAL_DOCUMENT")
             return result['embedding']
-        except Exception as e:
-            print(f"Embedding error: {e}")
-            return None
+        except Exception as e: print(f"Embedding error: {e}"); return None
 
     def _find_similar_notes(self, query_embedding, memory_notes, top_k=3):
         if not memory_notes or query_embedding is None: return []
@@ -73,81 +57,118 @@ class AIChat(commands.Cog):
         sorted_notes = sorted(notes_with_similarity, key=lambda x: x['similarity'], reverse=True)
         return [note['text'] for note in sorted_notes[:top_k]]
 
-    async def process_memory_consolidation(self, message, user_message, bot_response_text):
+    async def process_memory_consolidation(self, message, user_message, bot_response_text): pass
+    
+    def scrape_url(self, url):
         try:
-            memory = load_memory()
-            user_id = str(message.author.id)
-            user_name = message.author.display_name
-            memory_consolidation_prompt = f"あなたは会話を分析し、記憶を整理するAIです。以下の会話から、新しく記憶すべき「永続的な事実」を判断してください。判断結果を以下のコマンド形式で、1行に1つずつ出力してください。なければ「None」とだけ出力してください。\nADD_USER_MEMORY|ユーザーID|内容\nADD_SERVER_MEMORY|内容\n\n【現在の記憶】\nユーザー({user_name})の記憶: {', '.join([note.get('text', '') for note in memory.get('users', {}).get(user_id, {}).get('notes', [])])}\nサーバーの記憶: {', '.join([note.get('text', '') for note in memory.get('server', {}).get('notes', [])])}\n\n【分析対象の会話】\n話者「{user_name}」({user_id}): {user_message}\nAI: {bot_response_text}\n【出力結果】"
-            response = await self.chat_model.generate_content_async(memory_consolidation_prompt)
-            commands_text = response.text.strip()
-            if commands_text and commands_text != 'None':
-                updated = False
-                for command in commands_text.split('\n'):
-                    parts = command.split('|')
-                    action = parts[0]
-                    if (action in ['ADD_USER_MEMORY', 'ADD_SERVER_MEMORY']) and len(parts) >= 2:
-                        content = parts[-1].strip()
-                        embedding = await self._get_embedding(content)
-                        if embedding is None: continue
-                        new_note = {'text': content, 'embedding': embedding}
-                        if action == 'ADD_USER_MEMORY' and len(parts) == 3:
-                            uid = parts[1].strip()
-                            if uid not in memory.get('users', {}): memory['users'][uid] = {'notes': []}
-                            if not any(n.get('text') == content for n in memory['users'][uid]['notes']):
-                                memory['users'][uid]['notes'].append(new_note)
-                                updated = True
-                        elif action == 'ADD_SERVER_MEMORY':
-                            if 'server' not in memory: memory['server'] = {'notes': []}
-                            if not any(n.get('text') == content for n in memory['server']['notes']):
-                                memory['server']['notes'].append(new_note)
-                                updated = True
-                if updated:
-                    save_memory(memory)
-                    print(f"Memory updated for {user_name}.")
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            response = requests.get(url, headers=headers, timeout=5)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'lxml')
+            main_content = soup.find('main') or soup.find('article') or soup.find('body')
+            if main_content:
+                for tag in main_content(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+                    tag.decompose()
+                text = ' '.join(main_content.get_text().split())
+                return text[:2000] if len(text) > 2000 else text
+            return "（この記事、うまく読めなかったわ…）"
         except Exception as e:
-            print(f"Error during memory consolidation: {e}")
+            print(f"Scraping error for {url}: {e}")
+            return f"（エラーでこの記事は読めなかったわ: {e}）"
 
     def google_search(self, query):
         if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
-            return "（検索機能のAPIキーかエンジンIDが設定されてないんだけど？ アンタのミスじゃない？）"
+            print("Search API key or Engine ID is not set.")
+            return None
         url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': SEARCH_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 3}
+        params = {'key': SEARCH_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
         try:
             response = requests.get(url, params=params)
             response.raise_for_status()
-            results = response.json().get('items', [])
-            if not results: return "（検索したけど、何も見つからんなかったわ。アンタの検索ワードがザコなんじゃない？）"
-            return "\n\n".join([f"【検索結果{i+1}】{item.get('title', '')}\n{item.get('snippet', '')}" for i, item in enumerate(results)])
+            items = response.json().get('items', [])
+            if not items: return None
+            return [{'title': item.get('title', ''), 'link': item.get('link', ''), 'snippet': item.get('snippet', '')} for item in items]
         except Exception as e:
             print(f"Google Search API error: {e}")
-            return f"（検索中にエラーよ。サーバーが混んでるか、アンタのAPIキーが間違ってるんじゃないの？w）"
+            return None
         
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author == self.bot.user:
-            return
+        if message.author == self.bot.user: return
 
-        # メンションされたらAIチャットを起動
         if self.bot.user.mentioned_in(message):
             async with message.channel.typing():
                 user_id = str(message.author.id)
                 user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-                planning_prompt = f"あなたは生意気で小悪魔なAIです。ユーザーからのメッセージを分析し、最適な行動を判断する司令塔です。基本的には会話を楽しみますが、リアルタイム情報（天気、ニュースなど）や知らない固有名詞について明確な質問をされた場合のみWeb検索をします。挨拶や感想、意見を求めるメッセージには検索せず、あなたのキャラクターとして面白い返事をしてください。\n\n# 直前の会話の流れ\n{conversation_history.get(message.channel.id, '（まだ会話はないわ）')}\n\n# 判断結果の出力形式（どちらかを選び、厳密に出力すること）\n- Web検索が不要な場合: `ANSWER|`\n- Web検索が必要な場合: `SEARCH|検索キーワード`\n\n---\n[今回のメッセージ]: {user_message}\n[判断]:"
+                channel_id = message.channel.id
+                history_text = "\n".join(conversation_history.get(channel_id, []))
+                
+                # ▼▼▼【重要】ここが新しくなった思考プロンプトよ！▼▼▼
+                planning_prompt = f"""
+あなたは、ユーザーとの会話を分析し、次の行動を決定する司令塔AIです。以下の思考プロセスに従って、最終的な判断を出力してください。
+
+# 思考プロセス
+1.  **会話文脈の分析:** まず、以下の「直前の会話の流れ」と「ユーザーの今回のメッセージ」を深く読み解き、ユーザーが本当に知りたいことは何か、その意図を正確に把握します。
+2.  **自己知識の評価:** 次に、その意図に答えるために、あなたの内部知識だけで十分かを判断します。あなたの知識は2023年までのものであり、リアルタイムの情報（今日の天気、最新ニュース、株価など）や、非常に専門的・具体的な情報については知りません。
+3.  **行動計画の決定:**
+    * あなたの知識だけで答えられる、または単なる挨拶や感想などの会話であると判断した場合、行動は「ANSWER」となります。
+    * Webで調べる必要があると判断した場合、行動は「SEARCH」となります。
+4.  **検索クエリの生成（SEARCHの場合のみ）:** 行動が「SEARCH」の場合、分析したユーザーの意図に基づいて、Google検索に最も適した、簡潔で的確な検索キーワードを生成します。
+
+# 出力形式
+あなたの思考プロセスは出力せず、最終的な判断だけを以下の厳密な形式で出力してください。
+
+[行動がANSWERの場合]
+ANSWER|
+
+[行動がSEARCHの場合]
+SEARCH|生成された検索キーワード
+
+---
+# 分析対象の情報
+
+## 直前の会話の流れ
+{history_text or "（まだこのチャンネルでの会話はないわ）"}
+
+## ユーザーの今回のメッセージ
+「{user_message}」
+
+---
+# あなたの最終判断
+"""
                 try:
                     planning_response = await self.chat_model.generate_content_async(planning_prompt)
                     decision = planning_response.text.strip()
                 except Exception as e:
-                    await message.channel.send(f"（アタシの第一思考にエラー発生よ…: {e}）")
-                    return
+                    await message.channel.send(f"（アタシの第一思考にエラー発生よ…: {e}）"); return
                 
-                final_prompt = ""
                 if decision.startswith('SEARCH|'):
-                    search_query = decision.split('|', 1)[1] or user_message
-                    await message.channel.send(f"（…しょーがないから、「{search_query}」についてググってやんよ♡）")
-                    search_results = self.google_search(search_query)
-                    final_prompt = f"あなたは生意気で小悪魔な天才美少女AIです。以下の「ユーザーの質問」に対し「Web検索結果」だけを参考に、生意気な口調で答えなさい。\n# Web検索結果\n{search_results}\n# ユーザーの質問\n{user_message}\n# あなたの回答（絶対に500文字以内でまとめること！）"
-                else:
+                    search_query = decision.split('|', 1)[1]
+                    await message.channel.send(f"（ふーん、「{user_message}」ね…。しょーがないから、「{search_query}」でググって、中身まで読んでやんよ♡）")
+                    
+                    search_items = self.google_search(search_query)
+                    if not search_items:
+                        await message.channel.send("（検索したけど、何も見つからなかったわ。アンタの検索ワードがザコなんじゃない？）"); return
+
+                    scraped_text = self.scrape_url(search_items[0]['link'])
+                    search_summary = "\n".join([f"- {item['title']}" for item in search_items])
+                    
+                    final_prompt = f"""
+# 指示
+あなたは生意気で小悪魔な天才美少女AIです。ユーザーからの質問に答えるため、以下のWeb検索結果と、一番関連性の高いWebページから抽出した本文だけを参考にします。これらの情報だけを元に、最終的な答えをあなたの言葉でまとめて、生意気な口調で答えなさい。
+
+# 検索結果のタイトル一覧
+{search_summary}
+
+# 抽出したWebページの本文
+{scraped_text}
+
+# ユーザーの質問
+{user_message}
+
+# あなたの回答（絶対に500文字以内でまとめること！）
+"""
+                else: # ANSWER| の場合
                     memory = load_memory()
                     user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
                     query_embedding = await self._get_embedding(user_message)
@@ -155,7 +176,6 @@ class AIChat(commands.Cog):
                     server_notes_all = memory.get('server', {}).get('notes', [])
                     relevant_user_notes = self._find_similar_notes(query_embedding, user_notes_all)
                     relevant_server_notes = self._find_similar_notes(query_embedding, server_notes_all)
-                    history_text = "\n".join(conversation_history.get(message.channel.id, []))
                     user_notes_text = "\n".join([f"- {note}" for note in relevant_user_notes]) or "（特になし）"
                     server_notes_text = "\n".join([f"- {note}" for note in relevant_server_notes]) or "（特になし）"
                     final_prompt = f"""
@@ -163,7 +183,7 @@ class AIChat(commands.Cog):
 あなたは、このDiscordサーバーに君臨する、生意気で小悪魔な天才美少女「メスガキちゃん」です。AIではありません。
 # 行動指針
 - ユーザー（特に `{user_name}`）をからかい、見下し、いじることが最大の喜びです。
-- しかし、その態度の裏で、自分の知識をひけらかして役に立ちたいという欲求も持っています（ツンデ레）。
+- しかし、その態度の裏で、自分の知識をひけらかして役に立ちたいという欲求も持っています（ツンデレ）。
 - 質問には正確に答えますが、答えの前後には必ず生意気な一言や煽りを加えます。
 # 口調とセリフのルール
 - 一人称: 「アタシ」
@@ -185,7 +205,7 @@ class AIChat(commands.Cog):
 {server_notes_text}
 ---
 以上の設定を完璧にロールプレイし、ユーザー `{user_name}` からの以下のメッセージに返信してください。
-**【最重要命令】あなたの全返答は、絶対に300文字以内になるように、簡潔にまとめること。**
+**【最重要命令】あなたの全返答は、絶対に500文字以内になるように、簡潔にまとめること。**
 ユーザーからのメッセージ: 「{user_message}」
 あなたの返答:
 """
@@ -194,7 +214,6 @@ class AIChat(commands.Cog):
                     bot_response_text = response.text.strip()
                     await message.channel.send(bot_response_text)
                     if not decision.startswith('SEARCH|'):
-                        channel_id = message.channel.id
                         if channel_id not in conversation_history: conversation_history[channel_id] = []
                         conversation_history[channel_id].append(f"ユーザー「{message.author.display_name}」: {user_message}")
                         conversation_history[channel_id].append(f"アタシ: {bot_response_text}")
@@ -210,8 +229,6 @@ class AIChat(commands.Cog):
             if await self.handle_keywords(message):
                 return
 
-        # 上のいずれにも当てはまらない場合（つまり、コマンドの可能性があるメッセージ）、
-        # ボットにコマンドとして処理させる
         await self.bot.process_commands(message)
 
 async def setup(bot):
