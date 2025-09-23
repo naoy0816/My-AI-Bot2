@@ -7,6 +7,7 @@ import asyncio
 intents = discord.Intents.default()
 intents.message_content = True  # メッセージ内容を読み取るために必要
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
 # Bot起動時に実行される処理
 @bot.event
 async def on_ready():
@@ -22,6 +23,21 @@ async def on_ready():
                 print(f'❌ Failed to load {filename}: {e}')
     print('------------------------------------------------------')
     print('Bot is now online and ready!')
+
+# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+# on_messageイベントをbot.pyに定義し、コマンド処理を一元管理する
+# これにより、コマンドが二重に実行される問題を根本的に解決します。
+# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+@bot.event
+async def on_message(message):
+    # Bot自身のメッセージは何もしない
+    if message.author.bot:
+        return
+    
+    # メッセージをコマンドとして処理する
+    # cogs/ai_chat.py など、他のファイルで定義された on_message も
+    # この後ちゃんと実行されるので、チャット機能はこれまで通り動作します。
+    await bot.process_commands(message)
 
 # Botを起動
 async def main():
