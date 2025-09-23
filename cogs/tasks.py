@@ -6,19 +6,17 @@ import requests
 import datetime
 import json
 import google.generativeai as genai
-from . import utils # ★★★ utils.pyをインポート ★★★
+from . import _utils as utils # ★★★ _utils.pyをインポートするように修正 ★★★
 
-# RailwayのVolumeに保存するためのパス設定
+# (ここから下のコードは、前回の最適化で提案したものと同じです)
+# (ただし、インポート部分だけ上記のように修正されています)
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 
-# --- 環境変数から読み込む ---
 NOTICE_CHANNEL_ID = int(os.getenv('NOTICE_CHANNEL_ID', 0))
-# ★★★ 天気予報の緯度・経度を環境変数から取得（なければ名古屋） ★★★
 WEATHER_LATITUDE = float(os.getenv('WEATHER_LATITUDE', 35.1815))
 WEATHER_LONGITUDE = float(os.getenv('WEATHER_LONGITUDE', 136.9066))
 
-# 日本標準時（JST）を定義
 jst = datetime.timezone(datetime.timedelta(hours=9), name='JST')
 TARGET_TIME = datetime.time(hour=6, minute=0, tzinfo=jst)
 
@@ -33,7 +31,6 @@ class DailyTasks(commands.Cog):
         self.daily_report.cancel()
 
     def weather_code_to_emoji(self, code):
-        # (この関数の中身は変更なし)
         if code == 0: return "快晴☀️"
         if code == 1: return "晴れ☀️"
         if code == 2: return "一部曇り🌤️"
@@ -47,7 +44,6 @@ class DailyTasks(commands.Cog):
         return "よくわかんない天気"
 
     def get_weather_open_meteo(self):
-        # ★★★ 環境変数で設定された緯度・経度を使用 ★★★
         lat, lon = WEATHER_LATITUDE, WEATHER_LONGITUDE
         url = f"https://api.open-meteo.com/v1/jma?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FTokyo"
         try:
@@ -81,11 +77,10 @@ class DailyTasks(commands.Cog):
             weather_report = self.get_weather_open_meteo()
             await channel.send(embed=weather_report)
         
-        await asyncio.sleep(2) # ちょっと待機
+        await asyncio.sleep(2)
 
         async with channel.typing():
             query = "日本の最新ニューストピック"
-            # ★★★ utils.pyの関数を使用 ★★★
             search_results = utils.google_search(query)
             
             if isinstance(search_results, str):
