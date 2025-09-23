@@ -1,4 +1,4 @@
-# bot.py (最終完全版)
+# bot.py (ヘルプコマンド修正版)
 import discord
 from discord.ext import commands
 import os
@@ -16,13 +16,16 @@ intents.guilds = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# ▼▼▼【重要】デフォルトのヘルプコマンドを無効化する▼▼▼
+bot.remove_command('help')
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 # 起動時にCog（機能別ファイル）を読み込む
 @bot.event
 async def on_ready():
     print(f'Bot logged in as {bot.user}')
     print('------')
     for filename in os.listdir('./cogs'):
-        # ▼▼▼ keywords.py を読み込まないように修正 ▼▼▼
         if filename.endswith('.py') and filename != 'keywords.py':
             try:
                 await bot.load_extension(f'cogs.{filename[:-3]}')
