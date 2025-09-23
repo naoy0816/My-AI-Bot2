@@ -44,6 +44,26 @@ class UserCommands(commands.Cog):
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
         self.model = genai.GenerativeModel('gemini-1.5-flash')
 
+    # ▼▼▼【重要】アタシの脳内を覗くための新しいコマンドよ！▼▼▼
+    @commands.command()
+    async def debug_memory(self, ctx):
+        """クラウド上の長期記憶ファイル(bot_memory.json)の中身を表示するわよ"""
+        try:
+            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                memory_content = f.read()
+            
+            # 長すぎるとDiscordが怒るから、1900文字ごとに区切って送ってあげる
+            for i in range(0, len(memory_content), 1900):
+                chunk = memory_content[i:i+1900]
+                await ctx.send(f"```json\n{chunk}\n```")
+            await ctx.send("これがアタシの記憶の全てよ♡")
+
+        except FileNotFoundError:
+            await ctx.send("まだ記憶ファイル (`bot_memory.json`) が作られてないみたいね。アタシに何か覚えさせてみたら？")
+        except Exception as e:
+            await ctx.send(f"（ごめん、記憶を読み込もうとしたらエラーが出たわ…: {e}）")
+
+
     def google_search(self, query):
         if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
             return "（検索機能のAPIキーかエンジンIDが設定されてないんだけど？ アンタのミスじゃない？）"
