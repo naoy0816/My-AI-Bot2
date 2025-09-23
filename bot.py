@@ -30,15 +30,12 @@ async def on_ready():
 # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 @bot.event
 async def on_message(message):
-    # Bot自身のメッセージは何もしない
+    # Bot自身のメッセージ、または他のBotのメッセージは無視
     if message.author.bot:
         return
     
     # メッセージをコマンドとして処理する
-    # cogs/ai_chat.py など、他のファイルで定義された on_message も
-    # この後ちゃんと実行されるので、チャット機能はこれまで通り動作します。
     await bot.process_commands(message)
-
 # Botを起動
 async def main():
     # 環境変数からDiscord Botのトークンを取得
