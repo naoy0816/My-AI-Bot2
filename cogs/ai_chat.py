@@ -240,7 +240,5 @@ SEARCH|生成された検索キーワード
             if await self.handle_keywords(message):
                 return
 
-        await self.bot.process_commands(message)
-
 async def setup(bot):
     await bot.add_cog(AIChat(bot))
