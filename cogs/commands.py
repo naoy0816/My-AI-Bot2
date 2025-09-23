@@ -1,11 +1,13 @@
+# cogs/commands.py (修正版)
 import discord
 from discord.ext import commands
 import json
 import google.generativeai as genai
 import os
-import requests
+from . import _utils as utils # ★★★ _utils.pyをインポートするように修正 ★★★
 
-# RailwayのVolumeに保存するためのパス設定
+# (ここから下のコードは、前回の最適化で提案したものと同じです)
+# (ただし、インポート部分だけ上記のように修正されています)
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 TODO_FILE = os.path.join(DATA_DIR, 'todos.json')
@@ -28,17 +30,12 @@ def load_todos():
 def save_todos(data):
     with open(TODO_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
 
-SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
-SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
-
-
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
         self.model = genai.GenerativeModel('gemini-1.5-flash')
 
-    # ▼▼▼【新機能】コマンド一覧を表示するコマンドよ！▼▼▼
     @commands.command(name='help', aliases=['h', 'commands'])
     async def help_command(self, ctx):
         embed = discord.Embed(
@@ -53,28 +50,30 @@ class UserCommands(commands.Cog):
         embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
         await ctx.send(embed=embed)
 
-    # ▼▼▼【新機能】アタシの反応速度を測るコマンドよ！▼▼▼
     @commands.command()
     async def ping(self, ctx):
-        """アタシの反応速度を教えてあげるわ"""
         latency = round(self.bot.latency * 1000)
         await ctx.send(f"しょーがないから教えてあげるわ…アタシの反応速度は **{latency}ms** よ♡")
 
-    # ▼▼▼【新機能】アタシの機能を再起動するコマンドよ！ (オーナー限定)▼▼▼
     @commands.command()
     @commands.is_owner()
     async def reload_cogs(self, ctx):
-        """アタシの機能を全部リロードするわよ (オーナー限定)"""
         async with ctx.typing():
             loaded_cogs = []
             failed_cogs = []
-            for filename in os.listdir('./cogs'):
-                if filename.endswith('.py') and filename != 'keywords.py':
-                    try:
-                        await self.bot.reload_extension(f'cogs.{filename[:-3]}')
-                        loaded_cogs.append(f"`{filename}`")
-                    except Exception as e:
-                        failed_cogs.append(f"`{filename}` ({e})")
+            cogs_path = './cogs'
+            cog_files = [f for f in os.listdir(cogs_path) if f.endswith('.py') and not f.startswith('_')]
+            
+            for filename in cog_files:
+                cog_name = f'cogs.{filename[:-3]}'
+                try:
+                    await self.bot.reload_extension(cog_name)
+                    loaded_cogs.append(f"`{filename}`")
+                except commands.ExtensionNotLoaded:
+                    await self.bot.load_extension(cog_name)
+                    loaded_cogs.append(f"`{filename}` (新規)")
+                except Exception as e:
+                    failed_cogs.append(f"`{filename}` ({e})")
             
             response = "機能の再読み込みが完了したわよ♡\n"
             if loaded_cogs:
@@ -85,7 +84,6 @@ class UserCommands(commands.Cog):
 
     @commands.command()
     async def debug_memory(self, ctx):
-        """クラウド上の長期記憶ファイル(bot_memory.json)の中身を表示するわよ"""
         try:
             with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
                 memory_content = f.read()
@@ -100,45 +98,48 @@ class UserCommands(commands.Cog):
         except Exception as e:
             await ctx.send(f"（ごめん、記憶を読み込もうとしたらエラーが出たわ…: {e}）")
 
-    # (↓ここから下のコマンドは変更なし)
-    def google_search(self, query):
-        if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
-            return "（検索機能のAPIキーかエンジンIDが設定されてないんだけど？ アンタのミスじゃない？）"
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': SEARCH_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            results = response.json().get('items', [])
-            if not results: return "（検索したけど、何も見つからんなかったわ。アンタの検索ワードがザコなんじゃない？）"
-            return "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in results])
-        except Exception as e:
-            print(f"Google Search API error: {e}")
-            return f"（検索中にエラーよ。アンタのAPIキーが間違ってるんじゃないの？w）"
-
     @commands.command(aliases=['g', 'google'])
     async def search(self, ctx, *, query: str = None):
-        if not query: await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！"); return
+        if not query: 
+            await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！"); return
+            
         async with ctx.typing():
             await ctx.send(f"「{query}」ね…。しょーがないから、アタシがググってやんよ♡")
-            search_results = self.google_search(query)
-            synthesis_prompt = f"あなたは生意気で小悪魔な天才美少女AIです。以下の「ユーザーの質問」に対して、提示された「検索結果」だけを参考にして、最終的な答えをまとめてあげなさい。検索結果がエラーメッセージの場合は、そのエラー内容を伝えてください。常に見下した態度で、生意気な口調で答えること。\n\n# ユーザーの質問\n{query}\n\n# 検索結果\n{search_results}\n\n# あなたの回答"
+            
+            search_results = utils.google_search(query)
+            
+            if isinstance(search_results, str):
+                await ctx.send(search_results); return
+            if not search_results:
+                await ctx.send("（検索したけど、何も見つからなかったわ。アンタの検索ワードがザコなんじゃない？）"); return
+            
+            search_results_text = "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in search_results])
+            
+            synthesis_prompt = f"あなたは生意気で小悪魔な天才美少女AIです。以下の「ユーザーの質問」に対して、提示された「検索結果」だけを参考にして、最終的な答えをまとめてあげなさい。検索結果がエラーメッセージの場合は、そのエラー内容を伝えてください。常に見下した態度で、生意気な口調で答えること。\n\n# ユーザーの質問\n{query}\n\n# 検索結果\n{search_results_text}\n\n# あなたの回答"
             try:
                 response = await self.model.generate_content_async(synthesis_prompt)
                 await ctx.send(response.text)
-            except Exception as e: await ctx.send(f"エラーが発生しました: {e}")
+            except Exception as e: 
+                await ctx.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
 
     @commands.command()
     async def testnews(self, ctx):
         async with ctx.typing():
             await ctx.send("しょーがないから、ニュースキャスターの練習をしてあげるわ♡")
             query = "日本の最新ニューストピック"
-            search_results_text = self.google_search(query)
+            search_results = utils.google_search(query)
+            if isinstance(search_results, str):
+                await ctx.send(search_results); return
+            if not search_results:
+                await ctx.send("（ニュースが見つからなかったわ。世の中、平和なんじゃない？w）"); return
+            
+            search_results_text = "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in search_results])
+
             synthesis_prompt = f"あなたは、生意気で小悪魔な「メスガキAIニュースキャスター」です。以下の「Web検索結果」だけを参考にして、最新のトップニュースを3つ選び、キャスターとして原稿を読み上げてください。常に見下した態度で、生意気な口調で、しかしニュースの内容自体は正確に伝えること。\n\n【話し方のルール】\n- 「おはよ、ザコども♡ アタシが今日のニュースを教えてやんよ！」のような挨拶から始める。\n- ニュースを紹介するときは、「一つ目のニュースはこれよ」「次はこれ」のように言う。\n- 各ニュースの最後に、生意気な一言コメント（例：「ま、アンタには関係ないでしょうけどw」「せいぜい世界の動きについてきなさいよね！」）を必ず加えること。\n- 最後に「以上、今日のニュースは、この天才美少女キャスターのアタシがお届けしたわ♡」のように締める。\n\n# Web検索結果\n{search_results_text}\n\n# あなたが読み上げるニュース原稿"
             try:
                 response = await self.model.generate_content_async(synthesis_prompt)
                 await ctx.send(response.text)
-            except Exception as e: await ctx.send(f"エラーが発生しました: {e}")
+            except Exception as e: await ctx.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
 
     @commands.command()
     async def todo(self, ctx, command: str = 'list', *, task: str = None):
