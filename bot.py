@@ -6,8 +6,7 @@ import asyncio
 # Botの基本的な設定
 intents = discord.Intents.default()
 intents.message_content = True  # メッセージ内容を読み取るために必要
-bot = commands.Bot(command_prefix='!', intents=intents)
-
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 # Bot起動時に実行される処理
 @bot.event
 async def on_ready():
