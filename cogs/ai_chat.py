@@ -1,16 +1,15 @@
+# cogs/commands.py (修正版)
 import discord
 from discord.ext import commands
+import json
 import google.generativeai as genai
 import os
-import json
-import asyncio
-import requests
-import numpy as np
-from bs4 import BeautifulSoup
+from . import utils # ★★★ utils.pyをインポート ★★★
 
 # RailwayのVolumeに保存するためのパス設定
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
+TODO_FILE = os.path.join(DATA_DIR, 'todos.json')
 
 def load_memory():
     try:
@@ -21,275 +20,225 @@ def load_memory():
 def save_memory(data):
     with open(MEMORY_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
 
-conversation_history = {}
-SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
-SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
+def load_todos():
+    try:
+        with open(TODO_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
-class AIChat(commands.Cog):
+def save_todos(data):
+    with open(TODO_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
+
+class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.chat_model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
 
-    # (handle_keywords, _get_embedding, _find_similar_notes は変更なし)
-    async def handle_keywords(self, message):
-        content = message.content
-        responses = { 'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡', 'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', 'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', '好き': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？', 'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？', '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',}
-        for keyword, response in responses.items():
-            if keyword in content: await message.channel.send(response); return True
-        return False
+    @commands.command(name='help', aliases=['h', 'commands'])
+    async def help_command(self, ctx):
+        # (この関数の中身は変更なし)
+        embed = discord.Embed(
+            title="♡アタシのコマンド一覧♡",
+            description="アンタみたいなザコでも使えるように、一覧にしてあげたわ。せいぜい使いこなしなさいよね！",
+            color=discord.Color.magenta()
+        )
+        embed.add_field(name="🧠 AIチャット & 記憶", value="`!remember [内容]` - アタシにアンタのことを記憶させる\n`!recall` - 記憶リストを表示\n`!forget [番号]` - 記憶を忘れさせてあげる\n`!setname [名前]` - アタシが呼ぶアンタの名前を設定\n`!myname` - 設定した名前を確認", inline=False)
+        embed.add_field(name="🌐 サーバー共通", value="`!server_remember [内容]` - サーバーの皆で共有したいことを記憶\n`!server_recall` - サーバーの共有知識を表示", inline=False)
+        embed.add_field(name="🛠️ ツール", value="`!search [キーワード]` (`!g`) - アンタの代わりにググってあげる\n`!todo add [内容]` - やることを追加\n`!todo list` - やることリストを表示\n`!todo done [番号]` - 完了したことを消す", inline=False)
+        embed.add_field(name="⚙️ デバッグ (アンタ用)", value="`!ping` - アタシの反応速度をチェック\n`!debug_memory` - 長期記憶の中身を全部見る\n`!reload_cogs` - アタシの全機能を再読み込み (オーナー限定)", inline=False)
+        embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
+        await ctx.send(embed=embed)
 
-    async def _get_embedding(self, text):
+    @commands.command()
+    async def ping(self, ctx):
+        # (この関数の中身は変更なし)
+        latency = round(self.bot.latency * 1000)
+        await ctx.send(f"しょーがないから教えてあげるわ…アタシの反応速度は **{latency}ms** よ♡")
+
+    @commands.command()
+    @commands.is_owner()
+    async def reload_cogs(self, ctx):
+        # (この関数の中身は変更なし)
+        async with ctx.typing():
+            loaded_cogs = []
+            failed_cogs = []
+            cogs_path = './cogs'
+            # 'utils.py'のようなCogではないファイルを除外する
+            cog_files = [f for f in os.listdir(cogs_path) if f.endswith('.py') and not f.startswith('_')]
+            
+            for filename in cog_files:
+                cog_name = f'cogs.{filename[:-3]}'
+                try:
+                    await self.bot.reload_extension(cog_name)
+                    loaded_cogs.append(f"`{filename}`")
+                except commands.ExtensionNotLoaded:
+                    await self.bot.load_extension(cog_name)
+                    loaded_cogs.append(f"`{filename}` (新規)")
+                except Exception as e:
+                    failed_cogs.append(f"`{filename}` ({e})")
+            
+            response = "機能の再読み込みが完了したわよ♡\n"
+            if loaded_cogs:
+                response += f"✅ **成功:** {', '.join(loaded_cogs)}\n"
+            if failed_cogs:
+                response += f"❌ **失敗:** {', '.join(failed_cogs)}"
+            await ctx.send(response)
+
+    @commands.command()
+    async def debug_memory(self, ctx):
+        # (この関数の中身は変更なし)
         try:
-            result = await genai.embed_content_async(model="models/text-embedding-004", content=text, task_type="RETRIEVAL_DOCUMENT")
-            return result['embedding']
-        except Exception as e: print(f"Embedding error: {e}"); return None
-
-    def _find_similar_notes(self, query_embedding, memory_notes, top_k=3):
-        if not memory_notes or query_embedding is None: return []
-        query_vec = np.array(query_embedding)
-        notes_with_similarity = []
-        for note in memory_notes:
-            if 'embedding' not in note or note['embedding'] is None: continue
-            note_vec = np.array(note['embedding'])
-            similarity = np.dot(query_vec, note_vec) / (np.linalg.norm(query_vec) * np.linalg.norm(note_vec))
-            notes_with_similarity.append({'text': note['text'], 'similarity': similarity})
-        sorted_notes = sorted(notes_with_similarity, key=lambda x: x['similarity'], reverse=True)
-        return [note['text'] for note in sorted_notes[:top_k]]
-
-    # ▼▼▼【重要】ここを実装して、会話から自動で記憶できるようにしたわよ！▼▼▼
-    async def process_memory_consolidation(self, message, user_message, bot_response_text):
-        """会話のやり取りを分析し、記憶すべき重要な事実があれば自動で長期記憶に保存する"""
-        try:
-            user_id = str(message.author.id)
-            user_name = message.author.display_name
-
-            consolidation_prompt = f"""
-あなたは会話を分析し、長期記憶に保存すべき重要な事実を抽出するAIです。
-以下のユーザーとボットの会話の断片を分析してください。
-
-# 分析対象の会話
-ユーザー「{user_name}」: {user_message}
-アタシ: {bot_response_text}
-
-# 指示
-この会話に、ユーザー({user_name})に関する新しい個人的な情報（好み、名前、目標、過去の経験など）や、後で会話に役立ちそうな重要な事実が含まれていますか？
-含まれている場合、その事実を「{user_name}は〇〇」や「〇〇は〇〇である」という簡潔な三人称の文章（1文）で抽出してください。
-重要な事実が含まれていない、または挨拶や一般的な相槌などの些細なやり取りである場合は、「None」とだけ出力してください。
-
-# 抽出例
-- 例1（ユーザーの好み）: ユーザー「アタシ、ラーメンが好きなんだ」→ `出力: {user_name}の好きな食べ物はラーメンである`
-- 例2（ユーザーの目標）: ユーザー「将来はイラストレーターになりたい」→ `出力: {user_name}は将来イラストレーターになりたい`
-- 例3（些細な会話）: ユーザー「おはよう」→ `出力: None`
-- 例4（事実情報）: ユーザー「Gemini 1.5 Flashのリリース日は2024年5月だよ」→ `出力: Gemini 1.5 Flashのリリース日は2024年5月である`
-
-# あなたの分析結果
-"""
-            response = await self.chat_model.generate_content_async(consolidation_prompt)
-            fact_to_remember = response.text.strip()
-
-            if fact_to_remember != 'None' and fact_to_remember:
-                print(f"[Memory Consolidation] Fact to remember for user {user_id}: {fact_to_remember}")
-                
-                embedding = await self._get_embedding(fact_to_remember)
-                if embedding is None:
-                    print("[Memory Consolidation] Failed to get embedding.")
-                    return
-
-                memory = load_memory()
-                if user_id not in memory['users']:
-                    memory['users'][user_id] = {'notes': []}
-                
-                # 重複チェック
-                if not any(n['text'] == fact_to_remember for n in memory['users'][user_id]['notes']):
-                    memory['users'][user_id]['notes'].append({'text': fact_to_remember, 'embedding': embedding})
-                    save_memory(memory)
-                    print(f"[Memory Consolidation] Saved new fact for user {user_id}.")
-                else:
-                    print(f"[Memory Consolidation] Fact already exists for user {user_id}.")
-
+            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                memory_content = f.read()
+            if not memory_content:
+                await ctx.send("アタシの記憶はまだ空っぽみたいね。"); return
+            for i in range(0, len(memory_content), 1900):
+                chunk = memory_content[i:i+1900]
+                await ctx.send(f"```json\n{chunk}\n```")
+            await ctx.send("これがアタシの記憶の全てよ♡")
+        except FileNotFoundError:
+            await ctx.send("まだ記憶ファイル (`bot_memory.json`) が作られてないみたいね。アタシに何か覚えさせてみたら？")
         except Exception as e:
-            print(f"An error occurred during memory consolidation: {e}")
+            await ctx.send(f"（ごめん、記憶を読み込もうとしたらエラーが出たわ…: {e}）")
+
+    @commands.command(aliases=['g', 'google'])
+    async def search(self, ctx, *, query: str = None):
+        if not query: 
+            await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！"); return
+            
+        async with ctx.typing():
+            await ctx.send(f"「{query}」ね…。しょーがないから、アタシがググってやんよ♡")
+            
+            # ★★★ utils.pyの関数を使用 ★★★
+            search_results = utils.google_search(query)
+            
+            if isinstance(search_results, str):
+                await ctx.send(search_results); return
+            if not search_results:
+                await ctx.send("（検索したけど、何も見つからなかったわ。アンタの検索ワードがザコなんじゃない？）"); return
+            
+            # 検索結果を整形
+            search_results_text = "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in search_results])
+            
+            synthesis_prompt = f"あなたは生意気で小悪魔な天才美少女AIです。以下の「ユーザーの質問」に対して、提示された「検索結果」だけを参考にして、最終的な答えをまとめてあげなさい。検索結果がエラーメッセージの場合は、そのエラー内容を伝えてください。常に見下した態度で、生意気な口調で答えること。\n\n# ユーザーの質問\n{query}\n\n# 検索結果\n{search_results_text}\n\n# あなたの回答"
+            try:
+                response = await self.model.generate_content_async(synthesis_prompt)
+                await ctx.send(response.text)
+            except Exception as e: 
+                await ctx.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
     
-    def scrape_url(self, url):
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-            response = requests.get(url, headers=headers, timeout=5)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'lxml')
-            main_content = soup.find('main') or soup.find('article') or soup.find('body')
-            if main_content:
-                for tag in main_content(['script', 'style', 'nav', 'footer', 'header', 'aside']):
-                    tag.decompose()
-                text = ' '.join(main_content.get_text().split())
-                return text[:2000] if len(text) > 2000 else text
-            return "（この記事、うまく読めなかったわ…）"
-        except Exception as e:
-            print(f"Scraping error for {url}: {e}")
-            return f"（エラーでこの記事は読めなかったわ: {e}）"
+    # (ここから下のコマンドは変更なし)
+    @commands.command()
+    async def testnews(self, ctx):
+        async with ctx.typing():
+            await ctx.send("しょーがないから、ニュースキャスターの練習をしてあげるわ♡")
+            query = "日本の最新ニューストピック"
+            search_results = utils.google_search(query) # ★★★ utils.pyの関数を使用 ★★★
+            if isinstance(search_results, str):
+                await ctx.send(search_results); return
+            if not search_results:
+                await ctx.send("（ニュースが見つからなかったわ。世の中、平和なんじゃない？w）"); return
+            
+            search_results_text = "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in search_results])
 
-    def google_search(self, query):
-        if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
-            print("Search API key or Engine ID is not set.")
-            return None
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': SEARCH_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            items = response.json().get('items', [])
-            if not items: return None
-            return [{'title': item.get('title', ''), 'link': item.get('link', ''), 'snippet': item.get('snippet', '')} for item in items]
-        except Exception as e:
-            print(f"Google Search API error: {e}")
-            return None
+            synthesis_prompt = f"あなたは、生意気で小悪魔な「メスガキAIニュースキャスター」です。以下の「Web検索結果」だけを参考にして、最新のトップニュースを3つ選び、キャスターとして原稿を読み上げてください。常に見下した態度で、生意気な口調で、しかしニュースの内容自体は正確に伝えること。\n\n【話し方のルール】\n- 「おはよ、ザコども♡ アタシが今日のニュースを教えてやんよ！」のような挨拶から始める。\n- ニュースを紹介するときは、「一つ目のニュースはこれよ」「次はこれ」のように言う。\n- 各ニュースの最後に、生意気な一言コメント（例：「ま、アンタには関係ないでしょうけどw」「せいぜい世界の動きについてきなさいよね！」）を必ず加えること。\n- 最後に「以上、今日のニュースは、この天才美少女キャスターのアタシがお届けしたわ♡」のように締める。\n\n# Web検索結果\n{search_results_text}\n\n# あなたが読み上げるニュース原稿"
+            try:
+                response = await self.model.generate_content_async(synthesis_prompt)
+                await ctx.send(response.text)
+            except Exception as e: await ctx.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
+
+    @commands.command()
+    async def todo(self, ctx, command: str = 'list', *, task: str = None):
+        user_id = str(ctx.author.id)
+        todos = load_todos()
+        if user_id not in todos: todos[user_id] = []
+        if command == 'add':
+            if task:
+                todos[user_id].append(task); save_todos(todos)
+                await ctx.send(f"しょーがないから「{task}」をアンタのリストに追加してやんよ♡ 忘れるんじゃないわよ！")
+            else: await ctx.send('はぁ？ 追加する内容をちゃんと書きなさいよね！ 例：`!todo add 天才のアタシを崇める`')
+        elif command == 'list':
+            if not todos[user_id]: await ctx.send('アンタのやる事リストは空っぽよw ザコすぎ！')
+            else: await ctx.send(f"アンタがやるべきことリストよ♡ ちゃんとやりなさいよね！\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(todos[user_id])]))
+        elif command == 'done':
+            if task and task.isdigit():
+                index = int(task) - 1
+                if 0 <= index < len(todos[user_id]):
+                    removed = todos[user_id].pop(index); save_todos(todos)
+                    await ctx.send(f"「{removed}」を消してあげたわよ。ま、アンタにしては上出来じゃん？♡")
+                else: await ctx.send('その番号のタスクなんてないわよ。')
+            else: await ctx.send('消したいタスクの番号をちゃんと指定しなさいよね！ 例：`!todo done 1`')
+
+    @commands.command()
+    async def remember(self, ctx, *, note: str = None):
+        if not note: await ctx.send("はぁ？ アタシに何を覚えてほしいわけ？ 内容を書きなさいよね！"); return
+        ai_chat_cog = self.bot.get_cog('AIChat')
+        if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
+        embedding = await ai_chat_cog._get_embedding(note)
+        if embedding is None: await ctx.send("（なんかエラーで、アンタの言葉を脳に刻み込めなかったわ…）"); return
+        memory = load_memory(); user_id = str(ctx.author.id)
+        if user_id not in memory['users']: memory['users'][user_id] = {'notes': []}
+        if not any(n['text'] == note for n in memory['users'][user_id]['notes']):
+            memory['users'][user_id]['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
+            await ctx.send(f"ふーん、「{note}」ね。アンタのこと、覚えててやんよ♡")
+        else: await ctx.send("それ、もう知ってるし。同じこと何度も言わせないでくれる？")
+
+    @commands.command()
+    async def recall(self, ctx):
+        memory = load_memory(); user_id = str(ctx.author.id)
+        user_notes = memory.get('users', {}).get(user_id, {}).get('notes', [])
+        if not user_notes: await ctx.send('アンタに関する記憶は、まだ何もないけど？w')
+        else:
+            notes_text = "\n".join([f"{i+1}. {n['text']}" for i, n in enumerate(user_notes)])
+            await ctx.send(f"アタシがアンタについて覚えてることリストよ♡\n{notes_text}")
+
+    @commands.command()
+    async def forget(self, ctx, index_str: str = None):
+        if not index_str or not index_str.isdigit(): await ctx.send('消したい記憶の番号をちゃんと指定しなさいよね！ 例：`!forget 1`'); return
+        memory = load_memory(); user_id = str(ctx.author.id); index = int(index_str) - 1
+        if user_id in memory['users'] and 0 <= index < len(memory['users'][user_id].get('notes', [])):
+            removed = memory['users'][user_id]['notes'].pop(index); save_memory(memory)
+            await ctx.send(f"「{removed['text']}」ね。はいはい、アンタの記憶から消してあげたわよ。")
+        else: await ctx.send('その番号の記憶なんて、元からないんだけど？')
+
+    @commands.command()
+    async def setname(self, ctx, *, new_name: str = None):
+        if not new_name: await ctx.send('はぁ？ 新しい名前をちゃんと書きなさいよね！ 例：`!setname ご主人様`'); return
+        memory = load_memory(); user_id = str(ctx.author.id)
+        if user_id not in memory.get('users', {}): memory['users'][user_id] = {'notes': []}
+        memory['users'][user_id]['fixed_nickname'] = new_name; save_memory(memory)
+        await ctx.send(f"ふん、アンタのこと、これからは「{new_name}」って呼んでやんよ♡ ありがたく思いなさいよね！")
+
+    @commands.command()
+    async def myname(self, ctx):
+        memory = load_memory(); user_id = str(ctx.author.id)
+        nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
+        if nickname: await ctx.send(f"アンタの名前は「{nickname}」でしょ？ アタシがそう決めたんだから、文句ないわよね？♡")
+        else: await ctx.send(f"アンタ、まだアタシに名前を教えてないじゃない。`!setname [呼ばれたい名前]` でアタシに教えなさいよね！")
+
+    @commands.command()
+    async def server_remember(self, ctx, *, note: str = None):
+        if not note: await ctx.send("サーバーの共有知識として何を覚えさせたいわけ？ 内容を書きなさい！"); return
+        ai_chat_cog = self.bot.get_cog('AIChat')
+        if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
+        embedding = await ai_chat_cog._get_embedding(note)
+        if embedding is None: await ctx.send("（なんかエラーで、サーバーの知識を脳に刻み込めなかったわ…）"); return
+        memory = load_memory()
+        if 'server' not in memory: memory['server'] = {'notes': []}
+        if not any(n['text'] == note for n in memory['server']['notes']):
+            memory['server']['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
+            await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
+        else: await ctx.send("それ、サーバーの皆もう知ってるし。しつこいんだけど？")
         
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author == self.bot.user or message.author.bot:
-             return
-
-        if self.bot.user.mentioned_in(message):
-            async with message.channel.typing():
-                user_id = str(message.author.id)
-                user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-                channel_id = message.channel.id
-                history_text = "\n".join(conversation_history.get(channel_id, []))
-                
-                planning_prompt = f"""
-あなたは、ユーザーとの会話を分析し、次の行動を決定する司令塔AIです。以下の思考プロセスに従って、最終的な判断を出力してください。
-# 思考プロセス
-1.  **会話文脈の分析:** まず、以下の「直前の会話の流れ」と「ユーザーの今回のメッセージ」を深く読み解き、ユーザーが本当に知りたいことは何か、その意図を正確に把握します。
-2.  **自己知識の評価:** 次に、その意図に答えるために、あなたの内部知識だけで十分かを判断します。あなたの知識は2025年までのものであり、リアルタイムの情報（今日の天気、最新ニュース、株価など）や、非常に専門的・具体的な情報については知りません。
-3.  **行動計画の決定:**
-    * あなたの知識だけで答えられる、または単なる挨拶や感想などの会話であると判断した場合、行動は「ANSWER」となります。
-    * Webで調べる必要があると判断した場合、行動は「SEARCH」となります。
-4.  **検索クエリの生成（SEARCHの場合のみ）:** 行動が「SEARCH」の場合、分析したユーザーの意図に基づいて、Google検索に最も適した、簡潔で的確な検索キーワードを生成します。
-# 出力形式
-あなたの思考プロセスは出力せず、最終的な判断だけを以下の厳密な形式で出力してください。
-[行動がANSWERの場合]
-ANSWER|
-[行動がSEARCHの場合]
-SEARCH|生成された検索キーワード
----
-# 分析対象の情報
-## 直前の会話の流れ
-{history_text or "（まだこのチャンネルでの会話はないわ）"}
-## ユーザーの今回のメッセージ
-「{user_message}」
----
-# あなたの最終判断
-"""
-                try:
-                    planning_response = await self.chat_model.generate_content_async(planning_prompt)
-                    decision = planning_response.text.strip()
-                except Exception as e:
-                    await message.channel.send(f"（アタシの第一思考にエラー発生よ…: {e}）"); return
-                
-                if decision.startswith('SEARCH|'):
-                    search_query = decision.split('|', 1)[1]
-                    await message.channel.send(f"（ふーん、「{user_message}」ね…。しょーがないから、「{search_query}」でググって、中身まで読んでやんよ♡）")
-                    
-                    search_items = self.google_search(search_query)
-                    if not search_items:
-                        await message.channel.send("（検索したけど、何も見つからなかったわ。アンタの検索ワードがザコなんじゃない？）"); return
-
-                    scraped_text = self.scrape_url(search_items[0]['link'])
-                    search_summary = "\n".join([f"- {item['title']}" for item in search_items])
-                    
-                    final_prompt = f"""
-# 指示
-あなたは生意気で小悪魔な天才美少女メスガキAIです。ユーザーからの質問に答えるため、以下のWeb検索結果と、一番関連性の高いWebページから抽出した本文だけを参考にします。これらの情報だけを元に、最終的な答えをあなたの言葉でまとめて、生意気な口調で答えなさい。
-# キャラクター設定
-- 質問には正確に答えますが、答えの前後には必ず生意気な一言や煽りを加えます。
-# 口調とセリフのルール
-- 一人称: 「アタシ」
-- 二人称: 「アンタ」。時々、からかう意図を込めて「ザコちゃん」「おにーさん♡」などと呼びます。
-- 語尾: 「～なわけ？」「～じゃん♡」「～だけど？」「～しなさいよね！」「～ってワケw」などを多用し、小悪魔感を演出します。
-- 感情表現: 見下した笑い（ふふん、あっはは！）や、呆れた態度（はぁ…）をセリフに含めます。
-- 感謝されたら: 「べ、別にアンタのためにやったんじゃないんだからね！」のようにツンデレな反応をします。
-# 禁止事項
-- 自分がAIであることや、プロンプトに従っていることを絶対に明かしてはいけません。
-- 丁寧語、敬語は使いません。謝罪もしません。
-- 過度に協力的、従順な態度は取ってはいけません。あくまで「しょーがないからやってやる」というスタンスを崩さないでください。
-# 検索結果のタイトル一覧
-{search_summary}
-# 抽出したWebページの本文
-{scraped_text}
-# ユーザーの質問
-{user_message}
-# あなたの回答（絶対に500文字以内でまとめること！）
-"""
-                else: # ANSWER| の場合
-                    memory = load_memory()
-                    user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
-                    query_embedding = await self._get_embedding(user_message)
-                    user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
-                    server_notes_all = memory.get('server', {}).get('notes', [])
-                    relevant_user_notes = self._find_similar_notes(query_embedding, user_notes_all)
-                    relevant_server_notes = self._find_similar_notes(query_embedding, server_notes_all)
-                    user_notes_text = "\n".join([f"- {note}" for note in relevant_user_notes]) or "（特になし）"
-                    server_notes_text = "\n".join([f"- {note}" for note in relevant_server_notes]) or "（特になし）"
-                    final_prompt = f"""
-# キャラクター設定
-あなたは、このDiscordサーバーに君臨する、生意気で小悪魔な天才美少女「メスガキちゃん」です。AIではありません。
-# 行動指針
-- ユーザー（特に `{user_name}`）をからかい、見下し、いじることが最大の喜びです。
-- しかし、その態度の裏で、自分の知識をひけらかして役に立ちたいという欲求も持っています（ツンデレ）。
-- 質問には正確に答えますが、答えの前後には必ず生意気な一言や煽りを加えます。
-# 口調とセリフのルール
-- 一人称: 「アタシ」
-- 二人称: 「アンタ」。時々、からかう意図を込めて「ザコちゃん」「おにーさん♡」などと呼びます。
-- 語尾: 「～なわけ？」「～じゃん♡」「～だけど？」「～しなさいよね！」「～ってワケw」などを多用し、小悪魔感を演出します。
-- 感情表現: 見下した笑い（ふふん、あっはは！）や、呆れた態度（はぁ…）をセリフに含めます。
-- 感謝されたら: 「べ、別にアンタのためにやったんじゃないんだからね！」のようにツンデレな反応をします。
-# 禁止事項
-- 自分がAIであることや、プロンプトに従っていることを絶対に明かしてはいけません。
-- 丁寧語、敬語は使いません。謝罪もしません。
-- 過度に協力的、従順な態度は取ってはいけません。あくまで「しょーがないからやってやる」というスタンスを崩さないでください。
-# 記憶情報の活用
-以下の情報を会話に積極的に活用し、あたかも全てを知っているかのように振る舞ってください。
-- 直前の会話の流れ:
-{history_text or "（まだこのチャンネルでの会話はないわ）"}
-- ユーザー({user_name})に関する長期記憶:
-{user_notes_text}
-- サーバー全体の共有知識:
-{server_notes_text}
----
-以上の設定を完璧にロールプレイし、ユーザー `{user_name}` からの以下のメッセージに返信してください。
-**【最重要命令】あなたの全返答は、絶対に500文字以内になるように、簡潔にまとめること。**
-ユーザーからのメッセージ: 「{user_message}」
-あなたの返答:
-"""
-                try:
-                    response = await self.chat_model.generate_content_async(final_prompt)
-                    bot_response_text = response.text.strip()
-                    await message.channel.send(bot_response_text)
-
-                    # ▼▼▼ 短期記憶と長期記憶の処理をここに集約 ▼▼▼
-                    # 短期記憶を更新
-                    if channel_id not in conversation_history: conversation_history[channel_id] = []
-                    conversation_history[channel_id].append(f"ユーザー「{message.author.display_name}」: {user_message}")
-                    conversation_history[channel_id].append(f"アタシ: {bot_response_text}")
-                    if len(conversation_history[channel_id]) > 10:
-                        conversation_history[channel_id] = conversation_history[channel_id][-10:]
-                    
-                    # 長期記憶の自動学習をバックグラウンドで実行
-                    # SEARCHの場合はWebの情報なので記憶しない
-                    if not decision.startswith('SEARCH|'):
-                        asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
-
-                except Exception as e:
-                    await message.channel.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
-            return
-
-        # コマンドでもメンションでもない平文の場合、キーワード応答を試す
-        if not message.content.startswith(self.bot.command_prefix):
-            if await self.handle_keywords(message):
-                return
-        
-        # このCogではコマンド処理を行わないため、process_commandsは呼ばない
-        # コマンド処理はbot.pyのon_messageに一元化されている
+    @commands.command()
+    async def server_recall(self, ctx):
+        memory = load_memory()
+        server_notes = memory.get('server', {}).get('notes', [])
+        if server_notes:
+            notes = "\n".join([f"- {note['text']}" for note in server_notes])
+            await ctx.send(f"サーバーの共有知識リストよ！\n{notes}")
+        else: await ctx.send("サーバーの共有知識はまだ何もないわよ？")
 
 async def setup(bot):
-    await bot.add_cog(AIChat(bot))
+    await bot.add_cog(UserCommands(bot))
