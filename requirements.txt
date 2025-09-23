@@ -40,3 +40,5 @@ uritemplate==4.2.0
 urllib3==2.5.0
 yarl==1.20.1
 numpy==1.26.4  # ← これ！絶対忘れるんじゃないわよ！
+beautifulsoup4==4.12.3
+lxml==5.2.2
