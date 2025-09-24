@@ -43,7 +43,6 @@ class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        # ★★★ 脳みそを安定して使える flash モデルに設定 ★★★
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         self.db_manager = None
 
@@ -275,6 +274,7 @@ class AIChat(commands.Cog):
 """
         await self.generate_and_send_response(message, final_prompt, user_message, False)
 
+    # ★★★ ここが思考回路の核心！ 最終チューニング版よ！ ★★★
     async def build_final_prompt(self, message, user_message, decision_data, persona):
         user_id = str(message.author.id)
         memory = load_memory()
@@ -286,7 +286,7 @@ class AIChat(commands.Cog):
             relevant_logs_text = await self.db_manager.search_similar_messages(user_message)
         # ------------------------------------
 
-        # --- 古い記憶システムからの情報取得（まだ残しておくわ） ---
+        # --- 古い記憶システムからの情報取得（補助的に使うわ） ---
         query_embedding = await utils.get_embedding(user_message)
         user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
         server_notes_all = memory.get('server', {}).get('notes', [])
@@ -309,6 +309,7 @@ class AIChat(commands.Cog):
 
         char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
 
+        # ★★★ ここが最終チューニングよ！ 記憶の優先度を明確にしたわ！ ★★★
         return f"""
 {char_settings}
 ---
@@ -318,10 +319,16 @@ class AIChat(commands.Cog):
 [STRATEGY:{decision_data.get("STRATEGY", "不明")}]
 [POINTS:{decision_data.get("POINTS", "特になし")}]
 ---
-# 記憶情報（応答の参考にすること）
-- 直前の会話: {self.get_history_text(message.channel.id)}
-- ★★★ 関連性の高い過去の会話ログ: ★★★
+# 記憶情報（これらの情報を統合して、人間のように自然で文脈に合った応答を生成すること）
+
+## 【最優先】関連性の高い過去の会話ログ
+このサーバーの過去の会話で、今の話題に最も関連するものです。最優先で参考にし、会話に深みを持たせなさい。
 {relevant_logs_text}
+
+## 【参考】直前の会話
+{self.get_history_text(message.channel.id)}
+
+## 【参考】その他の知識
 - ユーザー({user_name})に関する手動記憶(JSON): {user_notes_text}
 - サーバー全体の共有知識(JSON): {server_notes_text}
 - サーバーの人間関係: {relationship_text}
