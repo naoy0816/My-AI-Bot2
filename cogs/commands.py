@@ -1,4 +1,4 @@
-# cogs/commands.py (最終完成版)
+# cogs/commands.py (ペルソナ反映・最終完成版)
 import discord
 from discord.ext import commands
 import json
@@ -40,7 +40,7 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-pro') # roast機能のためにProにしておくわ
+        self.model = genai.GenerativeModel('gemini-1.5-pro')
 
     # ★★★ ペルソナ管理コマンド ★★★
     @commands.command(name='list_personas', aliases=['personas'])
@@ -189,17 +189,46 @@ class UserCommands(commands.Cog):
     
     @commands.command(aliases=['g', 'google'])
     async def search(self, ctx, *, query: str = None):
+        """ペルソナを反映してWeb検索するわよ"""
         if not query: 
             await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！"); return
+            
         async with ctx.typing():
-            await ctx.send(f"「{query}」ね…。しょーがないから、アタシがググってやんよ♡")
+            # ★★★ ここからが修正箇所よ！ ★★★
+            persona = utils.get_current_persona()
+            if not persona:
+                await ctx.send("（ごめん、ペルソナファイルが読み込めなくて、どうやって喋ればいいかわかんないの…）")
+                return
+            
+            # ペルソナに応じたセリフで応答
+            await ctx.send(f"「{query}」ね…。しょーがないから、{persona.get('name', 'アタシ')}がググってやんよ♡")
+            
             search_results = utils.google_search(query)
             if isinstance(search_results, str):
                 await ctx.send(search_results); return
             if not search_results:
                 await ctx.send("（検索したけど、何も見つからなかったわ。アンタの検索ワードがザコなんじゃない？）"); return
+            
             search_results_text = "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in search_results])
-            synthesis_prompt = f"あなたは生意気で小悪魔な天才美少女AIです。以下の「ユーザーの質問」に対して、提示された「検索結果」だけを参考にして、最終的な答えをまとめてあげなさい。検索結果がエラーメッセージの場合は、そのエラー内容を伝えてください。常に見下した態度で、生意気な口調で答えること。\n\n# ユーザーの質問\n{query}\n\n# 検索結果\n{search_results_text}\n\n# あなたの回答"
+            
+            # ペルソナ設定を使ってプロンプトを構築
+            char_settings = persona["settings"].get("char_settings", "").format(user_name=ctx.author.display_name)
+            search_prompt_template = persona["settings"].get("search_prompt", "# 指示\n検索結果を元に応答しなさい。")
+
+            synthesis_prompt = f"""
+{char_settings}
+
+{search_prompt_template}
+
+# 検索結果
+{search_results_text}
+
+# ユーザーの質問
+{query}
+
+# あなたの回答（500文字以内でペルソナに従ってまとめること！）
+"""
+            # ★★★ 修正箇所はここまで ★★★
             try:
                 response = await self.model.generate_content_async(synthesis_prompt)
                 await ctx.send(response.text)
@@ -284,7 +313,7 @@ class UserCommands(commands.Cog):
         embedding = await ai_chat_cog._get_embedding(note)
         if embedding is None: await ctx.send("（なんかエラーで、サーバーの知識を脳に刻み込めなかったわ…）"); return
         memory = load_memory()
-        if 'server' not in memory: memory['server'] = {}
+        if 'server' not in memory: memory['server'] = {'notes': []}
         if not any(n['text'] == note for n in memory['server']['notes']):
             memory['server']['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
             await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
