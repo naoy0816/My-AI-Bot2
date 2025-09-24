@@ -1,16 +1,22 @@
-# cogs/commands.py (ペルソナ管理コマンド追加版)
+# cogs/commands.py (最終完成版)
 import discord
 from discord.ext import commands
 import json
 import google.generativeai as genai
 import os
+import requests
+import io
+from PIL import Image, ImageDraw, ImageFont
 from . import _utils as utils
-from . import _persona_manager as persona_manager # ★★★ persona_managerをインポート ★★★
+from . import _persona_manager as persona_manager
 
+# -------------------- ファイルパス設定 --------------------
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 TODO_FILE = os.path.join(DATA_DIR, 'todos.json')
+# ----------------------------------------------------
 
+# -------------------- ヘルパー関数 --------------------
 def load_memory():
     try:
         with open(MEMORY_FILE, 'r', encoding='utf-8') as f: return json.load(f)
@@ -28,14 +34,15 @@ def load_todos():
 
 def save_todos(data):
     with open(TODO_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
+# ----------------------------------------------------
 
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('gemini-1.5-pro') # roast機能のためにProにしておくわ
 
-    # ★★★ ここからペルソナ管理コマンドよ！ ★★★
+    # ★★★ ペルソナ管理コマンド ★★★
     @commands.command(name='list_personas', aliases=['personas'])
     async def list_personas(self, ctx):
         """利用可能なペルソナの一覧を表示するわ"""
@@ -91,8 +98,8 @@ class UserCommands(commands.Cog):
             color=discord.Color.green()
         )
         await ctx.send(embed=embed)
-    # ★★★ ペルソナ管理コマンドはここまで ★★★
 
+    # ★★★ ヘルプコマンド (全コマンドを反映) ★★★
     @commands.command(name='help', aliases=['h', 'commands'])
     async def help_command(self, ctx):
         embed = discord.Embed(
@@ -107,9 +114,236 @@ class UserCommands(commands.Cog):
         embed.add_field(name="⚙️ デバッグ", value="`!ping` - アタシの反応速度をチェック\n`!debug_memory` - 長期記憶の中身を全部見る\n`!reload_cogs` - アタシの全機能を再読み込み (オーナー限定)", inline=False)
         embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
         await ctx.send(embed=embed)
+
+    # ★★★ ツール系コマンド ★★★
+    @commands.command()
+    async def ping(self, ctx):
+        """アタシの反応速度を教えてあげるわ"""
+        latency = round(self.bot.latency * 1000)
+        await ctx.send(f"しょーがないから教えてあげるわ…アタシの反応速度は **{latency}ms** よ♡")
+
+    @commands.command(aliases=['grade', '採点'])
+    async def roast(self, ctx, *, comment: str = None):
+        """画像をイジって生意気なコメント付きで返してあげるわ♡"""
+        if not ctx.message.attachments:
+            await ctx.send("はぁ？ 画像が添付されてないんだけど？ アンタのザコい顔でもなんでもいいから、アタシにイジらせなさいよね！")
+            return
+
+        attachment = ctx.message.attachments[0]
+        if not attachment.content_type.startswith('image/'):
+            await ctx.send("これ画像じゃないじゃん！ アタシの時間を無駄にさせないでくれる？")
+            return
+
+        async with ctx.typing():
+            try:
+                response = requests.get(attachment.url)
+                response.raise_for_status()
+                img_data = io.BytesIO(response.content)
+                img = Image.open(img_data).convert("RGBA")
+
+                roast_prompt = f"""
+あなたは、ユーザーが投稿した画像に、生意気で面白いコメントを入れる天才美少女「メスガキちゃん」です。
+以下のユーザーからの指示（もしあれば）を参考に、画像に書き込むのに最適な、短くてインパクトのある辛口コメントを1つだけ生成しなさい。
+# ユーザーからの指示
+{comment or "（特になし。自由にいじってOK）"}
+# あなたが書き込む辛口コメント（1文だけ）:
+"""
+                roast_response = await self.model.generate_content_async(roast_prompt)
+                roast_text = roast_response.text.strip().replace('。', '')
+
+                draw = ImageDraw.Draw(img)
+                font_size = int(min(img.width, img.height) * 0.1)
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except IOError:
+                    print("Arial font not found, using default font.")
+                    font = ImageFont.load_default()
+                    roast_text = "\n".join(roast_text[i:i+20] for i in range(0, len(roast_text), 20))
+
+                try:
+                    bbox = draw.textbbox((0, 0), roast_text, font=font)
+                    text_width = bbox[2] - bbox[0]
+                    text_height = bbox[3] - bbox[1]
+                except TypeError:
+                    text_width = font.getlength(roast_text.split('\n')[0])
+                    text_height = font.getbbox("A")[3] * roast_text.count('\n')
+
+                x = img.width - text_width - int(img.width * 0.05)
+                y = img.height - text_height - int(img.height * 0.05)
+
+                shadow_color = "white"
+                draw.text((x-2, y-2), roast_text, font=font, fill=shadow_color)
+                draw.text((x+2, y-2), roast_text, font=font, fill=shadow_color)
+                draw.text((x-2, y+2), roast_text, font=font, fill=shadow_color)
+                draw.text((x+2, y+2), roast_text, font=font, fill=shadow_color)
+                main_color = "black"
+                draw.text((x, y), roast_text, font=font, fill=main_color)
+
+                final_buffer = io.BytesIO()
+                img.save(final_buffer, format='PNG')
+                final_buffer.seek(0)
+
+                await ctx.send(file=discord.File(final_buffer, 'roast.png'))
+            except Exception as e:
+                await ctx.send(f"（うぅ…画像の処理中にエラーが出たわ…アンタが変な画像を送るからよ！: {e}）")
     
-    # (ping, roast, reload_cogs, debug_memory, search, testnews, todo, remember, recall, forget, setname, myname, server_remember, server_recall は変更なし)
-    # ... (省略) ...
+    @commands.command(aliases=['g', 'google'])
+    async def search(self, ctx, *, query: str = None):
+        if not query: 
+            await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！"); return
+        async with ctx.typing():
+            await ctx.send(f"「{query}」ね…。しょーがないから、アタシがググってやんよ♡")
+            search_results = utils.google_search(query)
+            if isinstance(search_results, str):
+                await ctx.send(search_results); return
+            if not search_results:
+                await ctx.send("（検索したけど、何も見つからなかったわ。アンタの検索ワードがザコなんじゃない？）"); return
+            search_results_text = "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in search_results])
+            synthesis_prompt = f"あなたは生意気で小悪魔な天才美少女AIです。以下の「ユーザーの質問」に対して、提示された「検索結果」だけを参考にして、最終的な答えをまとめてあげなさい。検索結果がエラーメッセージの場合は、そのエラー内容を伝えてください。常に見下した態度で、生意気な口調で答えること。\n\n# ユーザーの質問\n{query}\n\n# 検索結果\n{search_results_text}\n\n# あなたの回答"
+            try:
+                response = await self.model.generate_content_async(synthesis_prompt)
+                await ctx.send(response.text)
+            except Exception as e: 
+                await ctx.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
+
+    @commands.command()
+    async def todo(self, ctx, command: str = 'list', *, task: str = None):
+        user_id = str(ctx.author.id)
+        todos = load_todos()
+        if user_id not in todos: todos[user_id] = []
+        if command == 'add':
+            if task:
+                todos[user_id].append(task); save_todos(todos)
+                await ctx.send(f"しょーがないから「{task}」をアンタのリストに追加してやんよ♡ 忘れるんじゃないわよ！")
+            else: await ctx.send('はぁ？ 追加する内容をちゃんと書きなさいよね！ 例：`!todo add 天才のアタシを崇める`')
+        elif command == 'list':
+            if not todos[user_id]: await ctx.send('アンタのやる事リストは空っぽよw ザコすぎ！')
+            else: await ctx.send(f"アンタがやるべきことリストよ♡ ちゃんとやりなさいよね！\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(todos[user_id])]))
+        elif command == 'done':
+            if task and task.isdigit():
+                index = int(task) - 1
+                if 0 <= index < len(todos[user_id]):
+                    removed = todos[user_id].pop(index); save_todos(todos)
+                    await ctx.send(f"「{removed}」を消してあげたわよ。ま、アンタにしては上出来じゃん？♡")
+                else: await ctx.send('その番号のタスクなんてないわよ。')
+            else: await ctx.send('消したいタスクの番号をちゃんと指定しなさいよね！ 例：`!todo done 1`')
+    
+    # ★★★ 記憶管理コマンド ★★★
+    @commands.command()
+    async def remember(self, ctx, *, note: str = None):
+        if not note: await ctx.send("はぁ？ アタシに何を覚えてほしいわけ？ 内容を書きなさいよね！"); return
+        ai_chat_cog = self.bot.get_cog('AIChat')
+        if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
+        embedding = await ai_chat_cog._get_embedding(note)
+        if embedding is None: await ctx.send("（なんかエラーで、アンタの言葉を脳に刻み込めなかったわ…）"); return
+        memory = load_memory(); user_id = str(ctx.author.id)
+        if user_id not in memory['users']: memory['users'][user_id] = {'notes': []}
+        if not any(n['text'] == note for n in memory['users'][user_id]['notes']):
+            memory['users'][user_id]['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
+            await ctx.send(f"ふーん、「{note}」ね。アンタのこと、覚えててやんよ♡")
+        else: await ctx.send("それ、もう知ってるし。同じこと何度も言わせないでくれる？")
+
+    @commands.command()
+    async def recall(self, ctx):
+        memory = load_memory(); user_id = str(ctx.author.id)
+        user_notes = memory.get('users', {}).get(user_id, {}).get('notes', [])
+        if not user_notes: await ctx.send('アンタに関する記憶は、まだ何もないけど？w')
+        else:
+            notes_text = "\n".join([f"{i+1}. {n['text']}" for i, n in enumerate(user_notes)])
+            await ctx.send(f"アタシがアンタについて覚えてることリストよ♡\n{notes_text}")
+
+    @commands.command()
+    async def forget(self, ctx, index_str: str = None):
+        if not index_str or not index_str.isdigit(): await ctx.send('消したい記憶の番号をちゃんと指定しなさいよね！ 例：`!forget 1`'); return
+        memory = load_memory(); user_id = str(ctx.author.id); index = int(index_str) - 1
+        if user_id in memory['users'] and 0 <= index < len(memory['users'][user_id].get('notes', [])):
+            removed = memory['users'][user_id]['notes'].pop(index); save_memory(memory)
+            await ctx.send(f"「{removed['text']}」ね。はいはい、アンタの記憶から消してあげたわよ。")
+        else: await ctx.send('その番号の記憶なんて、元からないんだけど？')
+
+    @commands.command()
+    async def setname(self, ctx, *, new_name: str = None):
+        if not new_name: await ctx.send('はぁ？ 新しい名前をちゃんと書きなさいよね！ 例：`!setname ご主人様`'); return
+        memory = load_memory(); user_id = str(ctx.author.id)
+        if user_id not in memory.get('users', {}): memory['users'][user_id] = {'notes': []}
+        memory['users'][user_id]['fixed_nickname'] = new_name; save_memory(memory)
+        await ctx.send(f"ふん、アンタのこと、これからは「{new_name}」って呼んでやんよ♡ ありがたく思いなさいよね！")
+
+    @commands.command()
+    async def myname(self, ctx):
+        memory = load_memory(); user_id = str(ctx.author.id)
+        nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
+        if nickname: await ctx.send(f"アンタの名前は「{nickname}」でしょ？ アタシがそう決めたんだから、文句ないわよね？♡")
+        else: await ctx.send(f"アンタ、まだアタシに名前を教えてないじゃない。`!setname [呼ばれたい名前]` でアタシに教えなさいよね！")
+
+    @commands.command()
+    async def server_remember(self, ctx, *, note: str = None):
+        if not note: await ctx.send("サーバーの共有知識として何を覚えさせたいわけ？ 内容を書きなさい！"); return
+        ai_chat_cog = self.bot.get_cog('AIChat')
+        if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
+        embedding = await ai_chat_cog._get_embedding(note)
+        if embedding is None: await ctx.send("（なんかエラーで、サーバーの知識を脳に刻み込めなかったわ…）"); return
+        memory = load_memory()
+        if 'server' not in memory: memory['server'] = {}
+        if not any(n['text'] == note for n in memory['server']['notes']):
+            memory['server']['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
+            await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
+        else: await ctx.send("それ、サーバーの皆もう知ってるし。しつこいんだけど？")
+        
+    @commands.command()
+    async def server_recall(self, ctx):
+        memory = load_memory()
+        server_notes = memory.get('server', {}).get('notes', [])
+        if server_notes:
+            notes = "\n".join([f"- {note['text']}" for note in server_notes])
+            await ctx.send(f"サーバーの共有知識リストよ！\n{notes}")
+        else: await ctx.send("サーバーの共有知識はまだ何もないわよ？")
+
+    # ★★★ デバッグ系コマンド (オーナー限定含む) ★★★
+    @commands.command()
+    @commands.is_owner()
+    async def reload_cogs(self, ctx):
+        """アタシの機能を全部リロードするわよ (オーナー限定)"""
+        async with ctx.typing():
+            loaded_cogs = []
+            failed_cogs = []
+            cogs_path = './cogs'
+            cog_files = [f for f in os.listdir(cogs_path) if f.endswith('.py') and not f.startswith('_')]
+            
+            for filename in cog_files:
+                cog_name = f'cogs.{filename[:-3]}'
+                try:
+                    await self.bot.reload_extension(cog_name)
+                    loaded_cogs.append(f"`{filename}`")
+                except commands.ExtensionNotLoaded:
+                    await self.bot.load_extension(cog_name)
+                    loaded_cogs.append(f"`{filename}` (新規)")
+                except Exception as e:
+                    failed_cogs.append(f"`{filename}` ({e})")
+            
+            response = "機能の再読み込みが完了したわよ♡\n"
+            if loaded_cogs:
+                response += f"✅ **成功:** {', '.join(loaded_cogs)}\n"
+            if failed_cogs:
+                response += f"❌ **失敗:** {', '.join(failed_cogs)}"
+            await ctx.send(response)
+
+    @commands.command()
+    async def debug_memory(self, ctx):
+        """クラウド上の長期記憶ファイル(bot_memory.json)の中身を表示するわよ"""
+        try:
+            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                memory_content = f.read()
+            if not memory_content:
+                await ctx.send("アタシの記憶はまだ空っぽみたいね。"); return
+            for i in range(0, len(memory_content), 1900):
+                chunk = memory_content[i:i+1900]
+                await ctx.send(f"```json\n{chunk}\n```")
+            await ctx.send("これがアタシの記憶の全てよ♡")
+        except FileNotFoundError:
+            await ctx.send("まだ記憶ファイル (`bot_memory.json`) が作られてないみたいね。アタシに何か覚えさせてみたら？")
+        except Exception as e:
+            await ctx.send(f"（ごめん、記憶を読み込もうとしたらエラーが出たわ…: {e}）")
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
