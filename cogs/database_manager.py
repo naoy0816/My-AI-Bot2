@@ -1,7 +1,8 @@
-# cogs/database_manager.py (最終版)
+# cogs/database_manager.py (最終修正版)
 import discord
 from discord.ext import commands
 import chromadb
+from chromadb.config import Settings # ★★★ これを追加したわ ★★★
 import os
 from . import _utils as utils
 
@@ -21,7 +22,14 @@ class DatabaseManager(commands.Cog):
         """データベースを初期化して、コレクションを準備する"""
         print("Initializing ChromaDB...")
         try:
-            self.chroma_client = chromadb.PersistentClient(path=DB_PATH)
+            # ★★★ ここを修正したわよ！ ★★★
+            # 匿名の利用状況報告（Telemetry）を無効にする設定を追加
+            self.chroma_client = chromadb.PersistentClient(
+                path=DB_PATH,
+                settings=Settings(anonymized_telemetry=False)
+            )
+            # ★★★ 修正はここまで ★★★
+            
             self.collection = self.chroma_client.get_or_create_collection(name=COLLECTION_NAME)
             print(f"ChromaDB initialized. Collection '{COLLECTION_NAME}' is ready.")
             print(f"Total documents in collection: {self.collection.count()}")
@@ -32,13 +40,16 @@ class DatabaseManager(commands.Cog):
         """メッセージをベクトル化してDBに保存する。重複はスキップ。"""
         if not self.collection or not message.content or len(message.content) < 5:
             return False
+
         try:
             existing = self.collection.get(ids=[str(message.id)])
             if existing and existing['ids']:
                 return False
+
             embedding = await utils.get_embedding(message.content)
             if not embedding:
                 return False
+
             metadata = {
                 "author_id": str(message.author.id),
                 "author_name": message.author.name,
@@ -46,6 +57,7 @@ class DatabaseManager(commands.Cog):
                 "channel_name": message.channel.name,
                 "timestamp": message.created_at.isoformat()
             }
+
             self.collection.add(
                 embeddings=[embedding],
                 documents=[message.content],
@@ -57,19 +69,16 @@ class DatabaseManager(commands.Cog):
             print(f"Error adding message {message.id} to DB: {e}")
             return False
 
-    # ★★★ ここが「神の記憶」を呼び覚ます検索機能よ！ ★★★
     async def search_similar_messages(self, query_text: str, top_k: int = 5):
         """関連する過去の会話をベクトル検索して、プロンプト用のテキストを返す"""
         if not self.collection or not query_text:
             return "（関連する過去ログは見つからなかったわ）"
 
         try:
-            # 検索用の文章をベクトル化
             query_embedding = await utils.get_embedding(query_text, task_type="RETRIEVAL_QUERY")
             if not query_embedding:
                 return "（関連する過去ログは見つからなかったわ）"
 
-            # DBに問い合わせ
             results = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=top_k
@@ -78,7 +87,6 @@ class DatabaseManager(commands.Cog):
             if not results or not results['documents'][0]:
                 return "（関連する過去ログは見つからなかったわ）"
 
-            # プロンプトに埋め込むためのテキストを整形
             found_logs = []
             for i, doc in enumerate(results['documents'][0]):
                 metadata = results['metadatas'][0][i]
@@ -88,7 +96,6 @@ class DatabaseManager(commands.Cog):
                 found_logs.append(log_entry)
             
             return "\n".join(found_logs)
-
         except Exception as e:
             print(f"Error searching similar messages: {e}")
             return f"（過去ログ検索中にエラー発生: {e}）"
