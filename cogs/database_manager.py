@@ -1,8 +1,9 @@
-# cogs/database_manager.py
+# cogs/database_manager.py (完全版)
 import discord
 from discord.ext import commands
 import chromadb
 import os
+from . import _utils as utils
 
 # -------------------- 設定項目 --------------------
 DB_PATH = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.') + "/chroma_db"
@@ -14,7 +15,7 @@ class DatabaseManager(commands.Cog):
         self.bot = bot
         self.chroma_client = None
         self.collection = None
-        # self.initialize_database() # 本格実装時にコメントを外す
+        self.initialize_database()
 
     def initialize_database(self):
         """データベースを初期化して、コレクションを準備する"""
@@ -27,17 +28,48 @@ class DatabaseManager(commands.Cog):
         except Exception as e:
             print(f"FATAL: Failed to initialize ChromaDB: {e}")
 
-    # --- 以下は、将来実装するための準備（今はまだ空っぽよ） ---
-
     async def add_message_to_db(self, message: discord.Message):
-        """将来的には、ここでメッセージをベクトル化してDBに保存するのよ"""
-        # print(f"[DB] Received message to add: {message.content}") # デバッグ用
-        pass # まだ実装しない
+        """メッセージをベクトル化してDBに保存する。重複はスキップ。"""
+        if not self.collection or not message.content or len(message.content) < 5:
+            return False
+
+        try:
+            # 1. 重複チェック
+            existing = self.collection.get(ids=[str(message.id)])
+            if existing and existing['ids']:
+                return False
+
+            # 2. ベクトル化
+            embedding = await utils.get_embedding(message.content)
+            if not embedding:
+                return False
+
+            # 3. メタデータ作成
+            metadata = {
+                "author_id": str(message.author.id),
+                "author_name": message.author.name,
+                "channel_id": str(message.channel.id),
+                "channel_name": message.channel.name,
+                "timestamp": message.created_at.isoformat()
+            }
+
+            # 4. DBに追加
+            self.collection.add(
+                embeddings=[embedding],
+                documents=[message.content],
+                metadatas=[metadata],
+                ids=[str(message.id)]
+            )
+            return True # 追加に成功
+        except Exception as e:
+            print(f"Error adding message {message.id} to DB: {e}")
+            return False # 追加に失敗
 
     async def search_similar_messages(self, query_text: str, top_k: int = 5):
-        """将来的には、ここで関連する過去の会話を検索するのよ"""
+        """関連する過去の会話を検索する (将来のための準備)"""
         print(f"[DB] Received search query: {query_text}")
-        return [] # まだ実装しないから空っぽを返す
+        # (将来、ここにベクトル検索のロジックを実装する)
+        return []
 
 async def setup(bot):
     await bot.add_cog(DatabaseManager(bot))
