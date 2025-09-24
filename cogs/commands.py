@@ -40,8 +40,9 @@ def save_todos(data):
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-pro') # roast機能のためにProにしておくわ
+        # ★★★ ここでの挨拶は bot.py に集約したので不要よ！ ★★★
+        # genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+        self.model = genai.GenerativeModel('gemini-1.5-flash') # roastやsearchはflashでも十分よ
 
     # ★★★ ペルソナ管理コマンド ★★★
     @commands.command(name='list_personas', aliases=['personas'])
@@ -112,7 +113,7 @@ class UserCommands(commands.Cog):
         embed.add_field(name="🌐 サーバー共通", value="`!server_remember [内容]` - サーバーの皆で共有したいことを記憶\n`!server_recall` - サーバーの共有知識を表示", inline=False)
         embed.add_field(name="👤 ペルソナ管理", value="`!list_personas` - ペルソナ一覧\n`!current_persona` - 現在のペルソナ確認\n`!set_persona [ID]` - ペルソナ切替 (オーナー限定)", inline=False)
         embed.add_field(name="🛠️ ツール", value="`!search [キーワード]` (`!g`) - アンタの代わりにググってあげる\n`!todo add [内容]` - やることを追加\n`!todo list` - やることリストを表示\n`!todo done [番号]` - 完了したことを消す\n`!roast` - (画像を添付して) アタシに画像をイジらせる", inline=False)
-        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)", inline=False)
+        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!test_recall [キーワード]` - DB記憶検索(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)", inline=False)
         embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
         await ctx.send(embed=embed)
 
@@ -310,7 +311,7 @@ class UserCommands(commands.Cog):
         embedding = await utils.get_embedding(note)
         if embedding is None: await ctx.send("（なんかエラーで、サーバーの知識を脳に刻み込めなかったわ…）"); return
         memory = load_memory()
-        if 'server' not in memory: memory['server'] = {}
+        if 'server' not in memory: memory['server'] = {'notes': []}
         if not any(n['text'] == note for n in memory['server']['notes']):
             memory['server']['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
             await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
