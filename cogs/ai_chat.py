@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (ペルソナシステム対応版)
+# cogs/ai_chat.py (完全版)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -10,12 +10,15 @@ import time
 from collections import deque
 import requests
 from . import _utils as utils
-from . import _persona_manager as persona_manager # ★★★ persona_managerをインポート ★★★
+from . import _persona_manager as persona_manager
 
-# (設定項目やグローバル変数は変更なし)
+# -------------------- 設定項目 --------------------
 ENABLE_PROACTIVE_INTERVENTION = True
 INTERVENTION_THRESHOLD = 0.78
 INTERVENTION_COOLDOWN = 300
+# ------------------------------------------------
+
+# ファイルパス設定
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 
@@ -40,9 +43,9 @@ class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
-    
-    # (handle_keywords, _get_embedding, _find_similar_notes, process_memory_consolidation, process_user_interaction は変更なし)
+        # ★★★ 脳みそを安定版の flash モデルに戻したわよ！ ★★★
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
+
     async def handle_keywords(self, message):
         content = message.content
         responses = { 'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡', 'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', 'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', '好き': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？', 'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？', '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',}
@@ -152,7 +155,6 @@ class AIChat(commands.Cog):
         attachment = message.attachments[0]
         user_name = message.author.display_name
         
-        # ★★★ 現在のペルソナを取得 ★★★
         persona = utils.get_current_persona()
         if not persona: await message.channel.send("（ペルソナファイルが読み込めないんだけど…！）"); return
 
@@ -168,7 +170,6 @@ class AIChat(commands.Cog):
                 file_data = response.content
                 media_blob = {"mime_type": mime_type, "data": file_data}
 
-                # ★★★ ペルソナ設定を使ってプロンプトを構築 ★★★
                 multimodal_prompt_template = persona["settings"].get("multimodal_prompt", "# 指示\nメディアを見て応答しなさい。")
                 char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
 
@@ -187,7 +188,6 @@ class AIChat(commands.Cog):
         async with message.channel.typing():
             user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
             
-            # ★★★ 現在のペルソナを取得 ★★★
             persona = utils.get_current_persona()
             if not persona: await message.channel.send("（ペルソナファイルが読み込めないんだけど…！）"); return
 
@@ -257,7 +257,6 @@ class AIChat(commands.Cog):
         scraped_text = utils.scrape_url(search_items[0].get('link', ''))
         search_summary = "\n".join([f"- {item.get('title', '')}" for item in search_items])
 
-        # ★★★ ペルソナ設定を使ってプロンプトを構築 ★★★
         search_prompt_template = persona["settings"].get("search_prompt", "# 指示\n検索結果を元に応答しなさい。")
         final_prompt = f"""
 {search_prompt_template}
@@ -295,7 +294,6 @@ class AIChat(commands.Cog):
                 except discord.NotFound: continue
             if relations: relationship_text = "\n".join(relations)
 
-        # ★★★ ペルソナ設定を使ってプロンプトを構築 ★★★
         char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
 
         return f"""
@@ -341,7 +339,6 @@ class AIChat(commands.Cog):
         if not persona: return
 
         async with message.channel.typing():
-            # ★★★ ペルソナ設定を使ってプロンプトを構築 ★★★
             intervention_prompt_template = persona["settings"].get("intervention_prompt", "ユーザーの会話に割り込みなさい。")
             intervention_prompt = intervention_prompt_template.format(user_content=message.content, relevant_fact=relevant_fact)
             
