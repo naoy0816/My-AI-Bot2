@@ -1,17 +1,31 @@
-# cogs/utils.py (新規作成)
+# cogs/_utils.py (修正版)
 import os
 import requests
 from bs4 import BeautifulSoup
+from . import _persona_manager as persona_manager # ★★★ persona_managerをインポート ★★★
 
 # --- 環境変数を読み込む ---
 SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
+DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.') # ★★★ 追加 ★★★
+MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json') # ★★★ 追加 ★★★
 
+def get_current_persona_name():
+    """bot_memory.jsonから現在のペルソナ名を取得する"""
+    try:
+        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+            memory = json.load(f)
+            return memory.get("server", {}).get("current_persona", persona_manager.DEFAULT_PERSONA)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return persona_manager.DEFAULT_PERSONA
+
+def get_current_persona():
+    """現在のペルソナ設定をロードして返す"""
+    persona_name = get_current_persona_name()
+    return persona_manager.load_persona(persona_name)
+
+# (google_search と scrape_url は変更なし)
 def google_search(query: str, num_results: int = 5) -> dict | str:
-    """
-    Google Custom Search APIを使ってWeb検索を実行する。
-    成功した場合は検索結果のリスト(dict)を、失敗した場合はエラーメッセージ(str)を返す。
-    """
     if not SEARCH_API_KEY or not SEARCH_ENGINE_ID:
         error_msg = "（検索機能のAPIキーかエンジンIDが設定されてないんだけど？ アンタのミスじゃない？）"
         print(error_msg)
@@ -35,30 +49,17 @@ def google_search(query: str, num_results: int = 5) -> dict | str:
         return error_msg
 
 def scrape_url(url: str) -> str:
-    """
-    指定されたURLの本文を抽出して返す。
-    """
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        
         soup = BeautifulSoup(response.content, 'lxml')
-        
-        # 主要なコンテンツが含まれていそうなタグを優先的に探す
         main_content = soup.find('main') or soup.find('article') or soup.find('body')
-        
         if main_content:
-            # 不要なタグ（ナビゲーション、フッター、広告など）を削除
             for tag in main_content(['script', 'style', 'nav', 'footer', 'header', 'aside', 'form']):
                 tag.decompose()
-            
-            # テキストを抽出して、余計な空白や改行を整理
             text = ' '.join(main_content.get_text(separator=' ', strip=True).split())
-            
-            # 長すぎる場合は2000文字に制限
             return text[:2000] if len(text) > 2000 else text
-            
         return "（この記事、うまく読めなかったわ…主要なコンテンツが見つからないんだけど？）"
     except requests.exceptions.RequestException as e:
         print(f"Scraping error for {url}: {e}")
