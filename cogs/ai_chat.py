@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (完全版)
+# cogs/ai_chat.py (真・最終完成版)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -43,6 +43,7 @@ class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+        # ★★★ 脳みそを安定して使える flash モデルに設定 ★★★
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         self.db_manager = None
 
@@ -279,6 +280,13 @@ class AIChat(commands.Cog):
         memory = load_memory()
         user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
         
+        # --- 新しい記憶システムからの情報取得 ---
+        relevant_logs_text = "（特になし）"
+        if self.db_manager:
+            relevant_logs_text = await self.db_manager.search_similar_messages(user_message)
+        # ------------------------------------
+
+        # --- 古い記憶システムからの情報取得（まだ残しておくわ） ---
         query_embedding = await utils.get_embedding(user_message)
         user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
         server_notes_all = memory.get('server', {}).get('notes', [])
@@ -286,6 +294,7 @@ class AIChat(commands.Cog):
         relevant_server_notes = [note['text'] for note in self._find_similar_notes(query_embedding, server_notes_all)]
         user_notes_text = "\n".join([f"- {note}" for note in relevant_user_notes]) or "（特になし）"
         server_notes_text = "\n".join([f"- {note}" for note in relevant_server_notes]) or "（特になし）"
+        # ----------------------------------------------------
         
         relationship_text = "（特になし）"
         if user_id in memory.get('relationships', {}):
@@ -311,8 +320,10 @@ class AIChat(commands.Cog):
 ---
 # 記憶情報（応答の参考にすること）
 - 直前の会話: {self.get_history_text(message.channel.id)}
-- ユーザー({user_name})の記憶: {user_notes_text}
-- サーバーの共有知識: {server_notes_text}
+- ★★★ 関連性の高い過去の会話ログ: ★★★
+{relevant_logs_text}
+- ユーザー({user_name})に関する手動記憶(JSON): {user_notes_text}
+- サーバー全体の共有知識(JSON): {server_notes_text}
 - サーバーの人間関係: {relationship_text}
 ---
 以上の全てを完璧に理解し、立案した「応答戦略」に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
