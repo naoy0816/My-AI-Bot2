@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (真・最終完成版)
+# cogs/ai_chat.py (完全版)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -43,8 +43,17 @@ class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        # ★★★ 脳みそを安定して使える flash モデルに設定 ★★★
         self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.db_manager = None
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Bot起動時にDBマネージャーを取得する"""
+        self.db_manager = self.bot.get_cog('DatabaseManager')
+        if self.db_manager:
+            print("Successfully linked with DatabaseManager.")
+        else:
+            print("Warning: DatabaseManager cog not found.")
 
     async def handle_keywords(self, message):
         content = message.content
@@ -52,12 +61,6 @@ class AIChat(commands.Cog):
         for keyword, response in responses.items():
             if keyword in content: await message.channel.send(response); return True
         return False
-
-    async def _get_embedding(self, text):
-        try:
-            result = await genai.embed_content_async(model="models/text-embedding-004", content=text, task_type="RETRIEVAL_DOCUMENT")
-            return result['embedding']
-        except Exception as e: print(f"Embedding error: {e}"); return None
 
     def _find_similar_notes(self, query_embedding, memory_notes, top_k=3):
         if not memory_notes or query_embedding is None: return []
@@ -86,7 +89,7 @@ class AIChat(commands.Cog):
             response = await self.model.generate_content_async(consolidation_prompt)
             fact_to_remember = response.text.strip()
             if fact_to_remember != 'None' and fact_to_remember:
-                embedding = await self._get_embedding(fact_to_remember)
+                embedding = await utils.get_embedding(fact_to_remember)
                 if embedding is None: return
                 memory = load_memory()
                 if user_id not in memory['users']: memory['users'][user_id] = {'notes': []}
@@ -117,11 +120,13 @@ class AIChat(commands.Cog):
                     save_memory(memory)
         except Exception as e: print(f"An error occurred during user interaction processing: {e}")
 
-
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot or message.content.startswith(self.bot.command_prefix): return
         
+        if self.db_manager:
+            asyncio.create_task(self.db_manager.add_message_to_db(message))
+
         channel_id = message.channel.id
         if channel_id not in recent_messages: recent_messages[channel_id] = deque(maxlen=6)
         recent_messages[channel_id].append({'author_id': message.author.id, 'author_name': message.author.display_name, 'content': message.content})
@@ -140,7 +145,7 @@ class AIChat(commands.Cog):
             now = time.time()
             if (now - last_intervention_time.get(channel_id, 0)) < INTERVENTION_COOLDOWN: return
             if len(message.content) < 10: return
-            query_embedding = await self._get_embedding(message.content)
+            query_embedding = await utils.get_embedding(message.content)
             if query_embedding is None: return
             memory = load_memory()
             all_notes = [note for user in memory['users'].values() for note in user['notes']] + memory['server']['notes']
@@ -180,7 +185,6 @@ class AIChat(commands.Cog):
 
                 response = await self.model.generate_content_async(prompt_parts)
                 await message.channel.send(response.text)
-
             except Exception as e:
                 await message.channel.send(f"（うぅ…アンタのファイルを見ようとしたら、アタシの目がぁぁ…！: {e}）")
 
@@ -275,7 +279,7 @@ class AIChat(commands.Cog):
         memory = load_memory()
         user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
         
-        query_embedding = await self._get_embedding(user_message)
+        query_embedding = await utils.get_embedding(user_message)
         user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
         server_notes_all = memory.get('server', {}).get('notes', [])
         relevant_user_notes = [note['text'] for note in self._find_similar_notes(query_embedding, user_notes_all)]
@@ -312,7 +316,7 @@ class AIChat(commands.Cog):
 - サーバーの人間関係: {relationship_text}
 ---
 以上の全てを完璧に理解し、立案した「応答戦略」に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
-**【最重要命令】全返答は300文字以内で簡潔にまとめること。**
+**【最重要命令】全返答は500文字以内で簡潔にまとめること。**
 # あなたの返答:
 """
 
@@ -356,7 +360,7 @@ class AIChat(commands.Cog):
 「{relevant_fact}」
 # 指示
 {intervention_prompt_template}
-# あなたの割り込み発言（300文字以内でペルソナに従ってまとめること！）:
+# あなたの割り込み発言（500文字以内でペルソナに従ってまとめること！）:
 """
                 
                 response = await self.model.generate_content_async(final_intervention_prompt)
