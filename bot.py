@@ -1,22 +1,24 @@
-# bot.py (修正版)
+# bot.py (最終修正版)
 import discord
 from discord.ext import commands
 import os
 import asyncio
+import google.generativeai as genai # ★★★ 追加 ★★★
 
 # Botの基本的な設定
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# Bot起動時に実行される処理
+# ★★★ ここで最初に一回だけ、AIに挨拶するのよ！ ★★★
 @bot.event
-async def on_ready():
-    print(f'Logged in as: {bot.user.name}')
-    print('------------------------------------------------------')
+async def setup_hook():
+    # GoogleのAIモデルを設定
+    genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+    print("Google Generative AI configured.")
     # cogsフォルダ内の全Cogを読み込む
+    print('------------------------------------------------------')
     for filename in os.listdir('./cogs'):
-        # ★★★ アンダースコアで始まるファイルは無視するように修正 ★★★
         if filename.endswith('.py') and not filename.startswith('_'):
             try:
                 await bot.load_extension(f'cogs.{filename[:-3]}')
@@ -24,7 +26,13 @@ async def on_ready():
             except Exception as e:
                 print(f'❌ Failed to load {filename}: {e}')
     print('------------------------------------------------------')
+
+
+@bot.event
+async def on_ready():
+    print(f'Logged in as: {bot.user.name}')
     print('Bot is now online and ready!')
+
 
 @bot.event
 async def on_message(message):
