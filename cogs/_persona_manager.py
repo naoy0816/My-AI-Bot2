@@ -1,7 +1,9 @@
 import json
 import os
 
-PERSONA_DIR = './personas'
+# ★★★ ここが間違ってたわよ！★★★
+# アタシの人格（ペルソナ）が保管されてる場所を正しく修正したわ
+PERSONA_DIR = './cogs/personas' 
 DEFAULT_PERSONA = 'mesugaki'
 
 def get_persona_path(persona_name):
