@@ -1,380 +1,419 @@
-# cogs/ai_chat.py (完全版)
+# cogs/commands.py (完全版)
 import discord
 from discord.ext import commands
+import json
 import google.generativeai as genai
 import os
-import json
-import asyncio
-import numpy as np
-import time
-from collections import deque
 import requests
+import io
+import time
+from PIL import Image, ImageDraw, ImageFont
 from . import _utils as utils
 from . import _persona_manager as persona_manager
 
-# -------------------- 設定項目 --------------------
-ENABLE_PROACTIVE_INTERVENTION = True
-INTERVENTION_THRESHOLD = 0.78
-INTERVENTION_COOLDOWN = 300
-# ------------------------------------------------
-
-# ファイルパス設定
+# -------------------- ファイルパス設定 --------------------
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
+TODO_FILE = os.path.join(DATA_DIR, 'todos.json')
+# ----------------------------------------------------
 
+# -------------------- ヘルパー関数 --------------------
 def load_memory():
     try:
-        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-            memory = json.load(f)
-            if 'relationships' not in memory: memory['relationships'] = {}
-            return memory
+        with open(MEMORY_FILE, 'r', encoding='utf-8') as f: return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"users": {}, "server": {"notes": [], "relationships": {}}}
+        return {"users": {}, "server": {"notes": []}}
 
 def save_memory(data):
-    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+    with open(MEMORY_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
 
-conversation_history = {}
-last_intervention_time = {}
-recent_messages = {}
+def load_todos():
+    try:
+        with open(TODO_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
-class AIChat(commands.Cog):
+def save_todos(data):
+    with open(TODO_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
+# ----------------------------------------------------
+
+class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
         self.model = genai.GenerativeModel('gemini-1.5-flash')
-        self.db_manager = None
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        """Bot起動時にDBマネージャーを取得する"""
-        self.db_manager = self.bot.get_cog('DatabaseManager')
-        if self.db_manager:
-            print("Successfully linked with DatabaseManager.")
-        else:
-            print("Warning: DatabaseManager cog not found.")
-
-    async def handle_keywords(self, message):
-        content = message.content
-        responses = { 'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡', 'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', 'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', '好き': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？', 'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？', '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',}
-        for keyword, response in responses.items():
-            if keyword in content: await message.channel.send(response); return True
-        return False
-
-    def _find_similar_notes(self, query_embedding, memory_notes, top_k=3):
-        if not memory_notes or query_embedding is None: return []
-        query_vec = np.array(query_embedding)
-        notes_with_similarity = []
-        for note in memory_notes:
-            if 'embedding' not in note or note['embedding'] is None: continue
-            note_vec = np.array(note['embedding'])
-            similarity = np.dot(query_vec, note_vec) / (np.linalg.norm(query_vec) * np.linalg.norm(note_vec))
-            notes_with_similarity.append({'text': note['text'], 'similarity': similarity})
-        sorted_notes = sorted(notes_with_similarity, key=lambda x: x['similarity'], reverse=True)
-        return sorted_notes[:top_k]
-
-    async def process_memory_consolidation(self, message, user_message, bot_response_text):
-        try:
-            user_id = str(message.author.id)
-            user_name = message.author.display_name
-            consolidation_prompt = f"""
-あなたは会話を分析し、長期記憶に保存すべき重要な事実を抽出するAIです。
-# 分析対象の会話
-ユーザー「{user_name}」: {user_message}
-アタシ: {bot_response_text}
-# 指示
-この会話に、ユーザー({user_name})に関する新しい個人的な情報（好み、名前、目標、過去の経験など）や、後で会話に役立ちそうな重要な事実が含まれていますか？含まれている場合、その事実を「{user_name}は〇〇」という簡潔な三人称の文章で抽出しなさい。そうでなければ「None」と出力しなさい。
-"""
-            response = await self.model.generate_content_async(consolidation_prompt)
-            fact_to_remember = response.text.strip()
-            if fact_to_remember != 'None' and fact_to_remember:
-                embedding = await utils.get_embedding(fact_to_remember)
-                if embedding is None: return
-                memory = load_memory()
-                if user_id not in memory['users']: memory['users'][user_id] = {'notes': []}
-                if not any(n['text'] == fact_to_remember for n in memory['users'][user_id]['notes']):
-                    memory['users'][user_id]['notes'].append({'text': fact_to_remember, 'embedding': embedding})
-                    save_memory(memory)
-        except Exception as e: print(f"An error occurred during memory consolidation: {e}")
-
-    async def process_user_interaction(self, message):
-        try:
-            channel_id = message.channel.id
-            author_id = str(message.author.id)
-            if channel_id not in recent_messages or not recent_messages[channel_id]: return
-            interaction_partners = {str(msg['author_id']) for msg in recent_messages[channel_id] if str(msg['author_id']) != author_id}
-            if not interaction_partners: return
-            context = "\n".join([f"{msg['author_name']}: {msg['content']}" for msg in recent_messages[channel_id]])
-            for partner_id in interaction_partners:
-                interaction_prompt = f"以下の会話の中心的なトピックを単語で抽出しなさい(例:ゲーム,アニメ)。不明ならNoneと出力。\n\n{context}"
-                response = await self.model.generate_content_async(interaction_prompt)
-                topic = response.text.strip()
-                if topic != 'None' and topic:
-                    memory = load_memory()
-                    for u1, u2 in [(author_id, partner_id), (partner_id, author_id)]:
-                        if u1 not in memory['relationships']: memory['relationships'][u1] = {}
-                        if u2 not in memory['relationships'][u1]: memory['relationships'][u1][u2] = {'topics': {}, 'interaction_count': 0}
-                        memory['relationships'][u1][u2]['topics'][topic] = memory['relationships'][u1][u2]['topics'].get(topic, 0) + 1
-                        memory['relationships'][u1][u2]['interaction_count'] += 1
-                    save_memory(memory)
-        except Exception as e: print(f"An error occurred during user interaction processing: {e}")
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot or message.content.startswith(self.bot.command_prefix): return
+    # ★★★ ペルソナ管理コマンド ★★★
+    @commands.command(name='list_personas', aliases=['personas'])
+    async def list_personas(self, ctx):
+        """利用可能なペルソナの一覧を表示するわ"""
+        personas = persona_manager.list_personas()
+        if not personas:
+            await ctx.send("利用できるペルソナが一人もいないんだけど？ `cogs/personas`フォルダを確認しなさい！")
+            return
         
-        if self.db_manager:
-            asyncio.create_task(self.db_manager.add_message_to_db(message))
-
-        channel_id = message.channel.id
-        if channel_id not in recent_messages: recent_messages[channel_id] = deque(maxlen=6)
-        recent_messages[channel_id].append({'author_id': message.author.id, 'author_name': message.author.display_name, 'content': message.content})
-        asyncio.create_task(self.process_user_interaction(message))
+        embed = discord.Embed(
+            title="♡アタシがなれる人格（ペルソナ）一覧♡",
+            description="`!set_persona [id]`でアタシの人格を変えられるわよ（オーナー限定）",
+            color=discord.Color.gold()
+        )
+        for p in personas:
+            embed.add_field(name=f"**{p['name']}** (`{p['id']}`)", value=p['description'], inline=False)
         
-        if self.bot.user.mentioned_in(message):
-            if message.attachments:
-                await self.handle_multimodal_mention(message)
-            else:
-                await self.handle_text_mention(message)
+        current_persona_name = utils.get_current_persona().get("name", "不明")
+        embed.set_footer(text=f"現在のアタシの人格: {current_persona_name}")
+        await ctx.send(embed=embed)
+
+    @commands.command(name='set_persona')
+    @commands.is_owner()
+    async def set_persona(self, ctx, persona_id: str = None):
+        """アタシの人格（ペルソナ）を切り替えるわよ（オーナー限定）"""
+        if not persona_id:
+            await ctx.send("はぁ？ どのアタシになりたいわけ？ IDを指定しなさい！ `!list_personas`で確認できるわよ。")
             return
 
-        if await self.handle_keywords(message): return
-        
-        if ENABLE_PROACTIVE_INTERVENTION:
-            now = time.time()
-            if (now - last_intervention_time.get(channel_id, 0)) < INTERVENTION_COOLDOWN: return
-            if len(message.content) < 10: return
-            query_embedding = await utils.get_embedding(message.content)
-            if query_embedding is None: return
-            memory = load_memory()
-            all_notes = [note for user in memory['users'].values() for note in user['notes']] + memory['server']['notes']
-            if not all_notes: return
-            most_relevant_note = self._find_similar_notes(query_embedding, all_notes, top_k=1)
-            if most_relevant_note and most_relevant_note[0]['similarity'] > INTERVENTION_THRESHOLD:
-                relevant_fact = most_relevant_note[0]['text']
-                await self.handle_proactive_intervention(message, relevant_fact)
+        available_personas = [p['id'] for p in persona_manager.list_personas()]
+        if persona_id not in available_personas:
+            await ctx.send(f"「{persona_id}」なんて人格、アタシにはないんだけど？ IDが間違ってるんじゃないの？")
+            return
 
-    async def handle_multimodal_mention(self, message):
-        user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-        attachment = message.attachments[0]
-        user_name = message.author.display_name
+        memory = load_memory()
+        if 'server' not in memory: memory['server'] = {}
+        memory['server']['current_persona'] = persona_id
+        save_memory(memory)
         
+        new_persona = persona_manager.load_persona(persona_id)
+        await ctx.send(f"ふん、しょーがないから、今日からアタシは「**{new_persona.get('name')}**」になってやんよ♡ ありがたく思いなさいよね！")
+    
+    @commands.command(name='current_persona')
+    async def current_persona(self, ctx):
+        """今のアタシがどんな人格か教えてあげる"""
         persona = utils.get_current_persona()
-        if not persona: await message.channel.send("（ペルソナファイルが読み込めないんだけど…！）"); return
+        if not persona:
+            await ctx.send("（ごめん、ペルソナファイルがなくて自分が誰だかわかんないの…）")
+            return
+        
+        embed = discord.Embed(
+            title=f"♡今のアタシは「{persona.get('name')}」よ♡",
+            description=persona.get('description'),
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
 
-        mime_type = attachment.content_type
-        if not (mime_type and (mime_type.startswith('image/') or mime_type.startswith('video/'))):
-            await message.channel.send("はぁ？ アタシに見せたいなら、画像か動画にしなさいよね！")
+    # ★★★ ヘルプコマンド (全コマンドを反映) ★★★
+    @commands.command(name='help', aliases=['h', 'commands'])
+    async def help_command(self, ctx):
+        embed = discord.Embed(
+            title="♡アタシのコマンド一覧♡",
+            description="アンタみたいなザコでも使えるように、一覧にしてあげたわ。せいぜい使いこなしなさいよね！",
+            color=discord.Color.magenta()
+        )
+        embed.add_field(name="🧠 AIチャット & 記憶", value="`!remember [内容]` - アタシにアンタのことを記憶させる\n`!recall` - 記憶リストを表示\n`!forget [番号]` - 記憶を忘れさせてあげる\n`!setname [名前]` - アタシが呼ぶアンタの名前を設定\n`!myname` - 設定した名前を確認", inline=False)
+        embed.add_field(name="🌐 サーバー共通", value="`!server_remember [内容]` - サーバーの皆で共有したいことを記憶\n`!server_recall` - サーバーの共有知識を表示", inline=False)
+        embed.add_field(name="👤 ペルソナ管理", value="`!list_personas` - ペルソナ一覧\n`!current_persona` - 現在のペルソナ確認\n`!set_persona [ID]` - ペルソナ切替 (オーナー限定)", inline=False)
+        embed.add_field(name="🛠️ ツール", value="`!search [キーワード]` (`!g`) - アンタの代わりにググってあげる\n`!todo add [内容]` - やることを追加\n`!todo list` - やることリストを表示\n`!todo done [番号]` - 完了したことを消す\n`!roast` - (画像を添付して) アタシに画像をイジらせる", inline=False)
+        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)", inline=False)
+        embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
+        await ctx.send(embed=embed)
+
+    # ★★★ ツール系コマンド ★★★
+    @commands.command()
+    async def ping(self, ctx):
+        """アタシの反応速度を教えてあげるわ"""
+        latency = round(self.bot.latency * 1000)
+        await ctx.send(f"しょーがないから教えてあげるわ…アタシの反応速度は **{latency}ms** よ♡")
+
+    @commands.command(aliases=['grade', '採点'])
+    async def roast(self, ctx, *, comment: str = None):
+        """画像をイジって生意気なコメント付きで返してあげるわ♡"""
+        if not ctx.message.attachments:
+            await ctx.send("はぁ？ 画像が添付されてないんだけど？ アンタのザコい顔でもなんでもいいから、アタシにイジらせなさいよね！")
             return
 
-        async with message.channel.typing():
+        attachment = ctx.message.attachments[0]
+        if not attachment.content_type.startswith('image/'):
+            await ctx.send("これ画像じゃないじゃん！ アタシの時間を無駄にさせないでくれる？")
+            return
+
+        async with ctx.typing():
             try:
-                response = await self.bot.loop.run_in_executor(None, requests.get, attachment.url)
+                response = requests.get(attachment.url)
                 response.raise_for_status()
-                file_data = response.content
-                media_blob = {"mime_type": mime_type, "data": file_data}
+                img_data = io.BytesIO(response.content)
+                img = Image.open(img_data).convert("RGBA")
 
-                multimodal_prompt_template = persona["settings"].get("multimodal_prompt", "# 指示\nメディアを見て応答しなさい。")
-                char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
-
-                prompt_parts = [
-                    f"{char_settings}\n{multimodal_prompt_template}\n\n# ユーザーのテキスト\n「{user_message or '（…無言でコレをアタシに見せてきたわ）'}」\n\n# あなたの応答（500文字以内でペルソナに従ってまとめること！）:",
-                    media_blob
-                ]
-
-                response = await self.model.generate_content_async(prompt_parts)
-                await message.channel.send(response.text)
-            except Exception as e:
-                await message.channel.send(f"（うぅ…アンタのファイルを見ようとしたら、アタシの目がぁぁ…！: {e}）")
-
-    async def handle_text_mention(self, message):
-        async with message.channel.typing():
-            user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-            
-            persona = utils.get_current_persona()
-            if not persona: await message.channel.send("（ペルソナファイルが読み込めないんだけど…！）"); return
-
-            meta_thinking_prompt = self.build_meta_thinking_prompt(message, user_message, persona)
-            
-            try:
-                response = await self.model.generate_content_async(meta_thinking_prompt)
-                decision_text = response.text.strip()
-            except Exception as e:
-                await message.channel.send(f"（アタシの超思考回路にエラー発生よ…: {e}）"); return
-
-            decision_data = self.parse_decision_text(decision_text)
-
-            if decision_data.get("ACTION") == 'SEARCH':
-                await self.execute_search_and_respond(message, user_message, decision_data.get("QUERY"), persona)
-            else:
-                final_prompt = await self.build_final_prompt(message, user_message, decision_data, persona)
-                await self.generate_and_send_response(message, final_prompt, user_message, True)
-
-    def build_meta_thinking_prompt(self, message, user_message, persona):
-        user_name = message.author.display_name
-        persona_name = persona.get("name", "AI")
-        persona_desc = persona.get("description", "応答します。")
-
-        return f"""
-あなたは、「{persona_name}」({persona_desc})の思考を司る「メタAI」です。
-ユーザーのメッセージを分析し、次の行動を【1回の思考で】決定してください。
-# 思考プロセス
-1. **意図と感情の分析:** ユーザーのメッセージ（「{user_message}」）と会話履歴を読み解き、真の意図（情報要求、共感、暇つぶし等）と感情（喜び、好奇心、疲れ等）を把握する。
-2. **行動決定:** 意図に基づき、取るべき行動を `SEARCH` (Web検索が必要) か `ANSWER` (自己知識で応答) のどちらかに決定する。
-3. **戦略立案 (ANSWERの場合):** `ANSWER` の場合、あなたの性格とユーザーの感情を考慮し、最適な応答戦略を `TEASE`, `HELP_RELUCTANTLY`, `TSUNDERE_CARE`, `SHOW_OFF` などから選択する。
-4. **クエリ/要点生成:**
-    - `SEARCH` の場合: 最適な検索クエリを生成する。
-    - `ANSWER` の場合: 応答に含めるべき重要な要点を3つ以内でリストアップする。
-# 分析対象
-- ユーザー名: {user_name}
-- 会話履歴: {self.get_history_text(message.channel.id)}
-- ユーザーのメッセージ: 「{user_message}」
-# 出力形式
-思考プロセスは出力せず、結果だけを以下の厳密な形式で出力すること。
-[ACTION:決定した行動]
-[QUERY:SEARCHの場合の検索クエリ]
-[EMOTION:分析した感情]
-[INTENT:分析した意図]
-[STRATEGY:ANSWERの場合の応答戦略]
-[POINTS:ANSWERの場合の要点（カンマ区切り）]
+                roast_prompt = f"""
+あなたは、ユーザーが投稿した画像に、生意気で面白いコメントを入れる天才美少女「メスガキちゃん」です。
+以下のユーザーからの指示（もしあれば）を参考に、画像に書き込むのに最適な、短くてインパクトのある辛口コメントを1つだけ生成しなさい。
+# ユーザーからの指示
+{comment or "（特になし。自由にいじってOK）"}
+# あなたが書き込む辛口コメント（1文だけ）:
 """
+                roast_response = await self.model.generate_content_async(roast_prompt)
+                roast_text = roast_response.text.strip().replace('。', '')
 
-    def parse_decision_text(self, text):
-        data = {}
-        for line in text.splitlines():
-            if ':' in line:
-                key, value = line.split(':', 1)
-                data[key.strip().lstrip('[').rstrip(']')] = value.strip()
-        return data
+                draw = ImageDraw.Draw(img)
+                font_size = int(min(img.width, img.height) * 0.1)
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except IOError:
+                    print("Arial font not found, using default font.")
+                    font = ImageFont.load_default()
+                    roast_text = "\n".join(roast_text[i:i+20] for i in range(0, len(roast_text), 20))
 
-    def get_history_text(self, channel_id):
-        return "\n".join(conversation_history.get(channel_id, [])) or "（まだこのチャンネルでの会話はないわ）"
+                try:
+                    bbox = draw.textbbox((0, 0), roast_text, font=font)
+                    text_width = bbox[2] - bbox[0]
+                    text_height = bbox[3] - bbox[1]
+                except TypeError:
+                    text_width = font.getlength(roast_text.split('\n')[0])
+                    text_height = font.getbbox("A")[3] * roast_text.count('\n')
 
-    async def execute_search_and_respond(self, message, user_message, query, persona):
-        if not query:
-            await message.channel.send("（はぁ？検索したいけど、肝心のキーワードを思いつかなかったわ…アンタの質問がザコすぎなんじゃない？）"); return
-        await message.channel.send(f"（ふーん、「{user_message}」ね…。しょーがないから、「{query}」でググって、中身まで読んでやんよ♡）")
-        search_items = utils.google_search(query) 
-        if isinstance(search_items, str) or not search_items:
-            await message.channel.send(search_items or "（検索したけど、何も見つからなかったわ。）"); return
-        scraped_text = utils.scrape_url(search_items[0].get('link', ''))
-        search_summary = "\n".join([f"- {item.get('title', '')}" for item in search_items])
+                x = img.width - text_width - int(img.width * 0.05)
+                y = img.height - text_height - int(img.height * 0.05)
 
-        search_prompt_template = persona["settings"].get("search_prompt", "# 指示\n検索結果を元に応答しなさい。")
-        final_prompt = f"""
+                shadow_color = "white"
+                draw.text((x-2, y-2), roast_text, font=font, fill=shadow_color)
+                draw.text((x+2, y-2), roast_text, font=font, fill=shadow_color)
+                draw.text((x-2, y+2), roast_text, font=font, fill=shadow_color)
+                draw.text((x+2, y+2), roast_text, font=font, fill=shadow_color)
+                main_color = "black"
+                draw.text((x, y), roast_text, font=font, fill=main_color)
+
+                final_buffer = io.BytesIO()
+                img.save(final_buffer, format='PNG')
+                final_buffer.seek(0)
+
+                await ctx.send(file=discord.File(final_buffer, 'roast.png'))
+            except Exception as e:
+                await ctx.send(f"（うぅ…画像の処理中にエラーが出たわ…アンタが変な画像を送るからよ！: {e}）")
+    
+    @commands.command(aliases=['g', 'google'])
+    async def search(self, ctx, *, query: str = None):
+        """ペルソナを反映してWeb検索するわよ"""
+        if not query: 
+            await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！"); return
+            
+        async with ctx.typing():
+            persona = utils.get_current_persona()
+            if not persona:
+                await ctx.send("（ごめん、ペルソナファイルが読み込めなくて、どうやって喋ればいいかわかんないの…）")
+                return
+            
+            await ctx.send(f"「{query}」ね…。しょーがないから、{persona.get('name', 'アタシ')}がググってやんよ♡")
+            
+            search_results = utils.google_search(query)
+            if isinstance(search_results, str):
+                await ctx.send(search_results); return
+            if not search_results:
+                await ctx.send("（検索したけど、何も見つからなかったわ。アンタの検索ワードがザコなんじゃない？）"); return
+            
+            search_results_text = "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in search_results])
+            
+            char_settings = persona["settings"].get("char_settings", "").format(user_name=ctx.author.display_name)
+            search_prompt_template = persona["settings"].get("search_prompt", "# 指示\n検索結果を元に応答しなさい。")
+
+            synthesis_prompt = f"""
+{char_settings}
 {search_prompt_template}
 # 検索結果
-{search_summary}
-# Webページ本文
-{scraped_text}
+{search_results_text}
 # ユーザーの質問
-{user_message}
+{query}
 # あなたの回答（500文字以内でペルソナに従ってまとめること！）
 """
-        await self.generate_and_send_response(message, final_prompt, user_message, False)
-
-    async def build_final_prompt(self, message, user_message, decision_data, persona):
-        user_id = str(message.author.id)
-        memory = load_memory()
-        user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
-        
-        query_embedding = await utils.get_embedding(user_message)
-        user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
-        server_notes_all = memory.get('server', {}).get('notes', [])
-        relevant_user_notes = [note['text'] for note in self._find_similar_notes(query_embedding, user_notes_all)]
-        relevant_server_notes = [note['text'] for note in self._find_similar_notes(query_embedding, server_notes_all)]
-        user_notes_text = "\n".join([f"- {note}" for note in relevant_user_notes]) or "（特になし）"
-        server_notes_text = "\n".join([f"- {note}" for note in relevant_server_notes]) or "（特になし）"
-        
-        relationship_text = "（特になし）"
-        if user_id in memory.get('relationships', {}):
-            relations = []
-            for partner_id, data in memory['relationships'][user_id].items():
-                try:
-                    partner = await self.bot.fetch_user(int(partner_id))
-                    top_topic = max(data['topics'], key=data['topics'].get) if data['topics'] else "色々な話"
-                    relations.append(f"- {partner.display_name}とは「{top_topic}」についてよく話している")
-                except discord.NotFound: continue
-            if relations: relationship_text = "\n".join(relations)
-
-        char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
-
-        return f"""
-{char_settings}
----
-# ★★★ アタシの思考と応答戦略 ★★★
-[EMOTION:{decision_data.get("EMOTION", "不明")}]
-[INTENT:{decision_data.get("INTENT", "不明")}]
-[STRATEGY:{decision_data.get("STRATEGY", "不明")}]
-[POINTS:{decision_data.get("POINTS", "特になし")}]
----
-# 記憶情報（応答の参考にすること）
-- 直前の会話: {self.get_history_text(message.channel.id)}
-- ユーザー({user_name})の記憶: {user_notes_text}
-- サーバーの共有知識: {server_notes_text}
-- サーバーの人間関係: {relationship_text}
----
-以上の全てを完璧に理解し、立案した「応答戦略」に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
-**【最重要命令】全返答は500文字以内で簡潔にまとめること。**
-# あなたの返答:
-"""
-
-    async def generate_and_send_response(self, message, final_prompt, user_message, should_consolidate_memory):
-        try:
-            response = await self.model.generate_content_async(final_prompt)
-            bot_response_text = response.text.strip()
-            await message.channel.send(bot_response_text)
-
-            channel_id = message.channel.id
-            if channel_id not in conversation_history: conversation_history[channel_id] = []
-            conversation_history[channel_id].append(f"ユーザー「{message.author.display_name}」: {user_message}")
-            conversation_history[channel_id].append(f"アタシ: {bot_response_text}")
-            if len(conversation_history[channel_id]) > 10:
-                conversation_history[channel_id] = conversation_history[channel_id][-10:]
-            
-            if should_consolidate_memory:
-                asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
-        except Exception as e:
-            await message.channel.send(f"（うぅ…アタシの最終思考にエラー発生よ！アンタのせい！: {e}）")
-
-    async def handle_proactive_intervention(self, message, relevant_fact):
-        persona = utils.get_current_persona()
-        if not persona: return
-
-        async with message.channel.typing():
             try:
-                channel_id = message.channel.id
-                context = "\n".join([f"{msg['author_name']}: {msg['content']}" for msg in recent_messages.get(channel_id, [])])
-                
-                char_settings = persona["settings"].get("char_settings", "").format(user_name="みんな")
-                intervention_prompt_template = persona["settings"].get("intervention_prompt", "会話に自然に割り込みなさい。")
-
-                final_intervention_prompt = f"""
-{char_settings}
-# 状況
-今、チャンネルでは以下の会話が進行中です。この会話の流れと、あなたが持っている知識を結びつけて、自然で面白い介入をしなさい。
-## 直近の会話の流れ
-{context}
-## あなたが持っている関連知識
-「{relevant_fact}」
-# 指示
-{intervention_prompt_template}
-# あなたの割り込み発言（500文字以内でペルソナに従ってまとめること！）:
-"""
-                
-                response = await self.model.generate_content_async(final_intervention_prompt)
-                intervention_text = response.text.strip()
-                
-                if len(intervention_text) < 5:
-                    print(f"[Proactive Intervention] Generated text is too short. Ignored.")
-                    return
-
-                await message.channel.send(intervention_text)
-                last_intervention_time[message.channel.id] = time.time()
-                
+                response = await self.model.generate_content_async(synthesis_prompt)
+                await ctx.send(response.text)
             except Exception as e: 
-                print(f"Error during proactive intervention: {e}")
+                await ctx.send(f"（うぅ…アタシの頭脳がショートしたわ…アンタのせいよ！: {e}）")
+
+    @commands.command()
+    async def todo(self, ctx, command: str = 'list', *, task: str = None):
+        user_id = str(ctx.author.id)
+        todos = load_todos()
+        if user_id not in todos: todos[user_id] = []
+        if command == 'add':
+            if task:
+                todos[user_id].append(task); save_todos(todos)
+                await ctx.send(f"しょーがないから「{task}」をアンタのリストに追加してやんよ♡ 忘れるんじゃないわよ！")
+            else: await ctx.send('はぁ？ 追加する内容をちゃんと書きなさいよね！ 例：`!todo add 天才のアタシを崇める`')
+        elif command == 'list':
+            if not todos[user_id]: await ctx.send('アンタのやる事リストは空っぽよw ザコすぎ！')
+            else: await ctx.send(f"アンタがやるべきことリストよ♡ ちゃんとやりなさいよね！\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(todos[user_id])]))
+        elif command == 'done':
+            if task and task.isdigit():
+                index = int(task) - 1
+                if 0 <= index < len(todos[user_id]):
+                    removed = todos[user_id].pop(index); save_todos(todos)
+                    await ctx.send(f"「{removed}」を消してあげたわよ。ま、アンタにしては上出来じゃん？♡")
+                else: await ctx.send('その番号のタスクなんてないわよ。')
+            else: await ctx.send('消したいタスクの番号をちゃんと指定しなさいよね！ 例：`!todo done 1`')
+    
+    # ★★★ 記憶管理コマンド ★★★
+    @commands.command()
+    async def remember(self, ctx, *, note: str = None):
+        if not note: await ctx.send("はぁ？ アタシに何を覚えてほしいわけ？ 内容を書きなさいよね！"); return
+        ai_chat_cog = self.bot.get_cog('AIChat')
+        if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
+        embedding = await utils.get_embedding(note)
+        if embedding is None: await ctx.send("（なんかエラーで、アンタの言葉を脳に刻み込めなかったわ…）"); return
+        memory = load_memory(); user_id = str(ctx.author.id)
+        if user_id not in memory['users']: memory['users'][user_id] = {'notes': []}
+        if not any(n['text'] == note for n in memory['users'][user_id]['notes']):
+            memory['users'][user_id]['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
+            await ctx.send(f"ふーん、「{note}」ね。アンタのこと、覚えててやんよ♡")
+        else: await ctx.send("それ、もう知ってるし。同じこと何度も言わせないでくれる？")
+
+    @commands.command()
+    async def recall(self, ctx):
+        memory = load_memory(); user_id = str(ctx.author.id)
+        user_notes = memory.get('users', {}).get(user_id, {}).get('notes', [])
+        if not user_notes: await ctx.send('アンタに関する記憶は、まだ何もないけど？w')
+        else:
+            notes_text = "\n".join([f"{i+1}. {n['text']}" for i, n in enumerate(user_notes)])
+            await ctx.send(f"アタシがアンタについて覚えてることリストよ♡\n{notes_text}")
+
+    @commands.command()
+    async def forget(self, ctx, index_str: str = None):
+        if not index_str or not index_str.isdigit(): await ctx.send('消したい記憶の番号をちゃんと指定しなさいよね！ 例：`!forget 1`'); return
+        memory = load_memory(); user_id = str(ctx.author.id); index = int(index_str) - 1
+        if user_id in memory['users'] and 0 <= index < len(memory['users'][user_id].get('notes', [])):
+            removed = memory['users'][user_id]['notes'].pop(index); save_memory(memory)
+            await ctx.send(f"「{removed['text']}」ね。はいはい、アンタの記憶から消してあげたわよ。")
+        else: await ctx.send('その番号の記憶なんて、元からないんだけど？')
+
+    @commands.command()
+    async def setname(self, ctx, *, new_name: str = None):
+        if not new_name: await ctx.send('はぁ？ 新しい名前をちゃんと書きなさいよね！ 例：`!setname ご主人様`'); return
+        memory = load_memory(); user_id = str(ctx.author.id)
+        if user_id not in memory.get('users', {}): memory['users'][user_id] = {'notes': []}
+        memory['users'][user_id]['fixed_nickname'] = new_name; save_memory(memory)
+        await ctx.send(f"ふん、アンタのこと、これからは「{new_name}」って呼んでやんよ♡ ありがたく思いなさいよね！")
+
+    @commands.command()
+    async def myname(self, ctx):
+        memory = load_memory(); user_id = str(ctx.author.id)
+        nickname = memory.get('users', {}).get(user_id, {}).get('fixed_nickname')
+        if nickname: await ctx.send(f"アンタの名前は「{nickname}」でしょ？ アタシがそう決めたんだから、文句ないわよね？♡")
+        else: await ctx.send(f"アンタ、まだアタシに名前を教えてないじゃない。`!setname [呼ばれたい名前]` でアタシに教えなさいよね！")
+
+    @commands.command()
+    async def server_remember(self, ctx, *, note: str = None):
+        if not note: await ctx.send("サーバーの共有知識として何を覚えさせたいわけ？ 内容を書きなさい！"); return
+        ai_chat_cog = self.bot.get_cog('AIChat')
+        if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
+        embedding = await utils.get_embedding(note)
+        if embedding is None: await ctx.send("（なんかエラーで、サーバーの知識を脳に刻み込めなかったわ…）"); return
+        memory = load_memory()
+        if 'server' not in memory: memory['server'] = {}
+        if not any(n['text'] == note for n in memory['server']['notes']):
+            memory['server']['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
+            await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
+        else: await ctx.send("それ、サーバーの皆もう知ってるし。しつこいんだけど？")
+        
+    @commands.command()
+    async def server_recall(self, ctx):
+        memory = load_memory()
+        server_notes = memory.get('server', {}).get('notes', [])
+        if server_notes:
+            notes = "\n".join([f"- {note['text']}" for note in server_notes])
+            await ctx.send(f"サーバーの共有知識リストよ！\n{notes}")
+        else: await ctx.send("サーバーの共有知識はまだ何もないわよ？")
+
+    # ★★★ デバッグ系コマンド (オーナー限定含む) ★★★
+    @commands.command()
+    @commands.is_owner()
+    async def reload_cogs(self, ctx):
+        """アタシの機能を全部リロードするわよ (オーナー限定)"""
+        async with ctx.typing():
+            loaded_cogs = []
+            failed_cogs = []
+            cogs_path = './cogs'
+            cog_files = [f for f in os.listdir(cogs_path) if f.endswith('.py') and not f.startswith('_')]
+            
+            for filename in cog_files:
+                cog_name = f'cogs.{filename[:-3]}'
+                try:
+                    await self.bot.reload_extension(cog_name)
+                    loaded_cogs.append(f"`{filename}`")
+                except commands.ExtensionNotLoaded:
+                    await self.bot.load_extension(cog_name)
+                    loaded_cogs.append(f"`{filename}` (新規)")
+                except Exception as e:
+                    failed_cogs.append(f"`{filename}` ({e})")
+            
+            response = "機能の再読み込みが完了したわよ♡\n"
+            if loaded_cogs:
+                response += f"✅ **成功:** {', '.join(loaded_cogs)}\n"
+            if failed_cogs:
+                response += f"❌ **失敗:** {', '.join(failed_cogs)}"
+            await ctx.send(response)
+
+    @commands.command()
+    async def debug_memory(self, ctx):
+        """クラウド上の長期記憶ファイル(bot_memory.json)の中身を表示するわよ"""
+        try:
+            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                memory_content = f.read()
+            if not memory_content:
+                await ctx.send("アタシの記憶はまだ空っぽみたいね。"); return
+            for i in range(0, len(memory_content), 1900):
+                chunk = memory_content[i:i+1900]
+                await ctx.send(f"```json\n{chunk}\n```")
+            await ctx.send("これがアタシの記憶の全てよ♡")
+        except FileNotFoundError:
+            await ctx.send("まだ記憶ファイル (`bot_memory.json`) が作られてないみたいね。アタシに何か覚えさせてみたら？")
+        except Exception as e:
+            await ctx.send(f"（ごめん、記憶を読み込もうとしたらエラーが出たわ…: {e}）")
+
+    @commands.command(name='backfill_logs')
+    @commands.is_owner()
+    async def backfill_logs(self, ctx, limit_per_channel: int = 100):
+        """
+        サーバーの過去ログをDBに保存するわ（オーナー限定）。
+        各チャンネルから最大何件取得するか指定できるわよ（デフォルト: 100）。
+        """
+        db_manager = self.bot.get_cog('DatabaseManager')
+        if not db_manager or not db_manager.collection:
+            await ctx.send("（ごめん、データベースマネージャーが準備できてないみたい…）")
+            return
+
+        await ctx.send(f"しょーがないから、過去ログ学習を始めるわよ！ 各チャンネル、最大{limit_per_channel}件まで遡ってアタシの記憶に刻んであげる♡")
+        
+        start_time = time.time()
+        total_processed = 0
+        total_added = 0
+        
+        text_channels = [ch for ch in ctx.guild.text_channels if ch.permissions_for(ctx.guild.me).read_message_history]
+
+        for channel in text_channels:
+            processed_in_channel = 0
+            added_in_channel = 0
+            try:
+                print(f"Processing channel: {channel.name}")
+                async for message in channel.history(limit=limit_per_channel):
+                    if message.author.bot or len(message.content) < 5:
+                        continue
+                    
+                    result = await db_manager.add_message_to_db(message)
+                    if result:
+                        added_in_channel += 1
+                    
+                    processed_in_channel += 1
+                
+                total_processed += processed_in_channel
+                total_added += added_in_channel
+
+            except discord.Forbidden:
+                print(f"Skipping channel {channel.name}: No permissions.")
+            except Exception as e:
+                print(f"Error processing channel {channel.name}: {e}")
+
+        end_time = time.time()
+        duration = round(end_time - start_time, 2)
+        
+        await ctx.send(f"過去ログ学習、完了したわよ！\n**処理したメッセージ:** {total_processed}件\n**新しく記憶に追加したメッセージ:** {total_added}件\n**かかった時間:** {duration}秒\n\nふぅ…ちょっと疲れちゃったじゃない…。")
 
 async def setup(bot):
-    await bot.add_cog(AIChat(bot))
+    await bot.add_cog(UserCommands(bot))
