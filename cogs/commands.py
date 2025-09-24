@@ -1,4 +1,4 @@
-# cogs/commands.py (ペルソナ反映・最終完成版)
+# cogs/commands.py (完全版)
 import discord
 from discord.ext import commands
 import json
@@ -6,6 +6,7 @@ import google.generativeai as genai
 import os
 import requests
 import io
+import time
 from PIL import Image, ImageDraw, ImageFont
 from . import _utils as utils
 from . import _persona_manager as persona_manager
@@ -40,7 +41,7 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
 
     # ★★★ ペルソナ管理コマンド ★★★
     @commands.command(name='list_personas', aliases=['personas'])
@@ -48,7 +49,7 @@ class UserCommands(commands.Cog):
         """利用可能なペルソナの一覧を表示するわ"""
         personas = persona_manager.list_personas()
         if not personas:
-            await ctx.send("利用できるペルソナが一人もいないんだけど？ `personas`フォルダを確認しなさい！")
+            await ctx.send("利用できるペルソナが一人もいないんだけど？ `cogs/personas`フォルダを確認しなさい！")
             return
         
         embed = discord.Embed(
@@ -111,7 +112,7 @@ class UserCommands(commands.Cog):
         embed.add_field(name="🌐 サーバー共通", value="`!server_remember [内容]` - サーバーの皆で共有したいことを記憶\n`!server_recall` - サーバーの共有知識を表示", inline=False)
         embed.add_field(name="👤 ペルソナ管理", value="`!list_personas` - ペルソナ一覧\n`!current_persona` - 現在のペルソナ確認\n`!set_persona [ID]` - ペルソナ切替 (オーナー限定)", inline=False)
         embed.add_field(name="🛠️ ツール", value="`!search [キーワード]` (`!g`) - アンタの代わりにググってあげる\n`!todo add [内容]` - やることを追加\n`!todo list` - やることリストを表示\n`!todo done [番号]` - 完了したことを消す\n`!roast` - (画像を添付して) アタシに画像をイジらせる", inline=False)
-        embed.add_field(name="⚙️ デバッグ", value="`!ping` - アタシの反応速度をチェック\n`!debug_memory` - 長期記憶の中身を全部見る\n`!reload_cogs` - アタシの全機能を再読み込み (オーナー限定)", inline=False)
+        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)", inline=False)
         embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
         await ctx.send(embed=embed)
 
@@ -194,13 +195,11 @@ class UserCommands(commands.Cog):
             await ctx.send("はぁ？ 何をググってほしいわけ？ ちゃんと書きなさいよね！"); return
             
         async with ctx.typing():
-            # ★★★ ここからが修正箇所よ！ ★★★
             persona = utils.get_current_persona()
             if not persona:
                 await ctx.send("（ごめん、ペルソナファイルが読み込めなくて、どうやって喋ればいいかわかんないの…）")
                 return
             
-            # ペルソナに応じたセリフで応答
             await ctx.send(f"「{query}」ね…。しょーがないから、{persona.get('name', 'アタシ')}がググってやんよ♡")
             
             search_results = utils.google_search(query)
@@ -211,24 +210,18 @@ class UserCommands(commands.Cog):
             
             search_results_text = "\n\n".join([f"【ソース: {item.get('displayLink')}】{item.get('title')}\n{item.get('snippet')}" for item in search_results])
             
-            # ペルソナ設定を使ってプロンプトを構築
             char_settings = persona["settings"].get("char_settings", "").format(user_name=ctx.author.display_name)
             search_prompt_template = persona["settings"].get("search_prompt", "# 指示\n検索結果を元に応答しなさい。")
 
             synthesis_prompt = f"""
 {char_settings}
-
 {search_prompt_template}
-
 # 検索結果
 {search_results_text}
-
 # ユーザーの質問
 {query}
-
 # あなたの回答（500文字以内でペルソナに従ってまとめること！）
 """
-            # ★★★ 修正箇所はここまで ★★★
             try:
                 response = await self.model.generate_content_async(synthesis_prompt)
                 await ctx.send(response.text)
@@ -263,7 +256,7 @@ class UserCommands(commands.Cog):
         if not note: await ctx.send("はぁ？ アタシに何を覚えてほしいわけ？ 内容を書きなさいよね！"); return
         ai_chat_cog = self.bot.get_cog('AIChat')
         if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
-        embedding = await ai_chat_cog._get_embedding(note)
+        embedding = await utils.get_embedding(note)
         if embedding is None: await ctx.send("（なんかエラーで、アンタの言葉を脳に刻み込めなかったわ…）"); return
         memory = load_memory(); user_id = str(ctx.author.id)
         if user_id not in memory['users']: memory['users'][user_id] = {'notes': []}
@@ -310,10 +303,10 @@ class UserCommands(commands.Cog):
         if not note: await ctx.send("サーバーの共有知識として何を覚えさせたいわけ？ 内容を書きなさい！"); return
         ai_chat_cog = self.bot.get_cog('AIChat')
         if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
-        embedding = await ai_chat_cog._get_embedding(note)
+        embedding = await utils.get_embedding(note)
         if embedding is None: await ctx.send("（なんかエラーで、サーバーの知識を脳に刻み込めなかったわ…）"); return
         memory = load_memory()
-        if 'server' not in memory: memory['server'] = {'notes': []}
+        if 'server' not in memory: memory['server'] = {}
         if not any(n['text'] == note for n in memory['server']['notes']):
             memory['server']['notes'].append({'text': note, 'embedding': embedding}); save_memory(memory)
             await ctx.send(f"ふーん、「{note}」ね。サーバーみんなのために覚えててやんよ♡")
@@ -373,6 +366,54 @@ class UserCommands(commands.Cog):
             await ctx.send("まだ記憶ファイル (`bot_memory.json`) が作られてないみたいね。アタシに何か覚えさせてみたら？")
         except Exception as e:
             await ctx.send(f"（ごめん、記憶を読み込もうとしたらエラーが出たわ…: {e}）")
+
+    @commands.command(name='backfill_logs')
+    @commands.is_owner()
+    async def backfill_logs(self, ctx, limit_per_channel: int = 100):
+        """
+        サーバーの過去ログをDBに保存するわ（オーナー限定）。
+        各チャンネルから最大何件取得するか指定できるわよ（デフォルト: 100）。
+        """
+        db_manager = self.bot.get_cog('DatabaseManager')
+        if not db_manager or not db_manager.collection:
+            await ctx.send("（ごめん、データベースマネージャーが準備できてないみたい…）")
+            return
+
+        await ctx.send(f"しょーがないから、過去ログ学習を始めるわよ！ 各チャンネル、最大{limit_per_channel}件まで遡ってアタシの記憶に刻んであげる♡")
+        
+        start_time = time.time()
+        total_processed = 0
+        total_added = 0
+        
+        text_channels = [ch for ch in ctx.guild.text_channels if ch.permissions_for(ctx.guild.me).read_message_history]
+
+        for channel in text_channels:
+            processed_in_channel = 0
+            added_in_channel = 0
+            try:
+                print(f"Processing channel: {channel.name}")
+                async for message in channel.history(limit=limit_per_channel):
+                    if message.author.bot or len(message.content) < 5:
+                        continue
+                    
+                    result = await db_manager.add_message_to_db(message)
+                    if result:
+                        added_in_channel += 1
+                    
+                    processed_in_channel += 1
+                
+                total_processed += processed_in_channel
+                total_added += added_in_channel
+
+            except discord.Forbidden:
+                print(f"Skipping channel {channel.name}: No permissions.")
+            except Exception as e:
+                print(f"Error processing channel {channel.name}: {e}")
+
+        end_time = time.time()
+        duration = round(end_time - start_time, 2)
+        
+        await ctx.send(f"過去ログ学習、完了したわよ！\n**処理したメッセージ:** {total_processed}件\n**新しく記憶に追加したメッセージ:** {total_added}件\n**かかった時間:** {duration}秒\n\nふぅ…ちょっと疲れちゃったじゃない…。")
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
