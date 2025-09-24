@@ -1,4 +1,4 @@
-# cogs/_utils.py (完全版)
+# cogs/_utils.py (エラー修正版)
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -17,10 +17,7 @@ async def get_embedding(text: str, task_type="RETRIEVAL_DOCUMENT"):
     if not text or not isinstance(text, str):
         return None
     try:
-        # APIキーが設定されていることを確認
-        if not genai.conf.api_key:
-            genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-            
+        # ★★★ ここがエラーの原因よ！ 古い通行証のチェックを削除したわ ★★★
         result = await genai.embed_content_async(
             model="models/text-embedding-004",
             content=text,
