@@ -1,4 +1,4 @@
-# cogs/commands.py (完全版)
+# cogs/commands.py (最終完成版)
 import discord
 from discord.ext import commands
 import json
@@ -41,7 +41,7 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('gemini-1.5-pro') # roast機能のためにProにしておくわ
 
     # ★★★ ペルソナ管理コマンド ★★★
     @commands.command(name='list_personas', aliases=['personas'])
@@ -215,11 +215,15 @@ class UserCommands(commands.Cog):
 
             synthesis_prompt = f"""
 {char_settings}
+
 {search_prompt_template}
+
 # 検索結果
 {search_results_text}
+
 # ユーザーの質問
 {query}
+
 # あなたの回答（500文字以内でペルソナに従ってまとめること！）
 """
             try:
@@ -414,6 +418,42 @@ class UserCommands(commands.Cog):
         duration = round(end_time - start_time, 2)
         
         await ctx.send(f"過去ログ学習、完了したわよ！\n**処理したメッセージ:** {total_processed}件\n**新しく記憶に追加したメッセージ:** {total_added}件\n**かかった時間:** {duration}秒\n\nふぅ…ちょっと疲れちゃったじゃない…。")
+        
+    @commands.command(name='test_recall')
+    @commands.is_owner()
+    async def test_recall(self, ctx, *, query: str = None):
+        """
+        アタシの新しい記憶（DB）から、関連する過去ログを検索して表示するわよ（オーナー限定）。
+        """
+        if not query:
+            await ctx.send("はぁ？ 何について思い出せばいいわけ？ キーワードを指定しなさい！")
+            return
+
+        db_manager = self.bot.get_cog('DatabaseManager')
+        if not db_manager:
+            await ctx.send("（ごめん、データベースマネージャーが見つからないわ…）")
+            return
+        
+        async with ctx.typing():
+            await ctx.send(f"「{query}」について、アタシの記憶を遡ってみるわね…♡")
+            
+            # DBから関連ログを検索
+            search_results = await db_manager.search_similar_messages(query, top_k=5)
+
+            if not search_results or "見つからなかった" in search_results or not search_results.strip():
+                await ctx.send(f"「{query}」に関する記憶は、アタシの中にはないみたい…")
+                return
+            
+            embed = discord.Embed(
+                title=f"「{query}」に関連するアタシの記憶",
+                description="（このサーバーの過去ログよ）",
+                color=discord.Color.purple()
+            )
+            embed.add_field(name="思い出したこと", value=search_results, inline=False)
+            embed.set_footer(text="これが、アタシがアンタたちのことを見てきた証よ♡")
+            
+            await ctx.send(embed=embed)
+
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
