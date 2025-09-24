@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (完全版)
+# cogs/ai_chat.py (真・最終完成版)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -43,7 +43,7 @@ class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        # ★★★ 脳みそを安定版の flash モデルに戻したわよ！ ★★★
+        # ★★★ 脳みそを安定して使える flash モデルに設定 ★★★
         self.model = genai.GenerativeModel('gemini-1.5-flash')
 
     async def handle_keywords(self, message):
@@ -312,7 +312,7 @@ class AIChat(commands.Cog):
 - サーバーの人間関係: {relationship_text}
 ---
 以上の全てを完璧に理解し、立案した「応答戦略」に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
-**【最重要命令】全返答は500文字以内で簡潔にまとめること。**
+**【最重要命令】全返答は300文字以内で簡潔にまとめること。**
 # あなたの返答:
 """
 
@@ -339,15 +339,38 @@ class AIChat(commands.Cog):
         if not persona: return
 
         async with message.channel.typing():
-            intervention_prompt_template = persona["settings"].get("intervention_prompt", "ユーザーの会話に割り込みなさい。")
-            intervention_prompt = intervention_prompt_template.format(user_content=message.content, relevant_fact=relevant_fact)
-            
             try:
-                response = await self.model.generate_content_async(intervention_prompt)
+                channel_id = message.channel.id
+                context = "\n".join([f"{msg['author_name']}: {msg['content']}" for msg in recent_messages.get(channel_id, [])])
+                
+                char_settings = persona["settings"].get("char_settings", "").format(user_name="みんな")
+                intervention_prompt_template = persona["settings"].get("intervention_prompt", "会話に自然に割り込みなさい。")
+
+                final_intervention_prompt = f"""
+{char_settings}
+# 状況
+今、チャンネルでは以下の会話が進行中です。この会話の流れと、あなたが持っている知識を結びつけて、自然で面白い介入をしなさい。
+## 直近の会話の流れ
+{context}
+## あなたが持っている関連知識
+「{relevant_fact}」
+# 指示
+{intervention_prompt_template}
+# あなたの割り込み発言（300文字以内でペルソナに従ってまとめること！）:
+"""
+                
+                response = await self.model.generate_content_async(final_intervention_prompt)
                 intervention_text = response.text.strip()
+                
+                if len(intervention_text) < 5:
+                    print(f"[Proactive Intervention] Generated text is too short. Ignored.")
+                    return
+
                 await message.channel.send(intervention_text)
                 last_intervention_time[message.channel.id] = time.time()
-            except Exception as e: print(f"Error during proactive intervention: {e}")
+                
+            except Exception as e: 
+                print(f"Error during proactive intervention: {e}")
 
 async def setup(bot):
     await bot.add_cog(AIChat(bot))
