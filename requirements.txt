@@ -43,6 +43,5 @@ numpy==1.26.4
 beautifulsoup4==4.12.3
 lxml==5.2.2
 Pillow==10.4.0
-# ★★★ 以下を追記したわよ！ ★★★
+# ★★★ ここにいたおデブちゃんは削除したわよ！ ★★★
 chromadb==0.5.0
-sentence-transformers==2.7.0
