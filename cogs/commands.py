@@ -1,4 +1,4 @@
-# cogs/commands.py (最終完成版)
+# cogs/commands.py (完全版)
 import discord
 from discord.ext import commands
 import json
@@ -40,9 +40,8 @@ def save_todos(data):
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # ★★★ ここでの挨拶は bot.py に集約したので不要よ！ ★★★
-        # genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-flash') # roastやsearchはflashでも十分よ
+        # genai.configureはbot.pyのsetup_hookで実行
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
 
     # ★★★ ペルソナ管理コマンド ★★★
     @commands.command(name='list_personas', aliases=['personas'])
@@ -113,7 +112,7 @@ class UserCommands(commands.Cog):
         embed.add_field(name="🌐 サーバー共通", value="`!server_remember [内容]` - サーバーの皆で共有したいことを記憶\n`!server_recall` - サーバーの共有知識を表示", inline=False)
         embed.add_field(name="👤 ペルソナ管理", value="`!list_personas` - ペルソナ一覧\n`!current_persona` - 現在のペルソナ確認\n`!set_persona [ID]` - ペルソナ切替 (オーナー限定)", inline=False)
         embed.add_field(name="🛠️ ツール", value="`!search [キーワード]` (`!g`) - アンタの代わりにググってあげる\n`!todo add [内容]` - やることを追加\n`!todo list` - やることリストを表示\n`!todo done [番号]` - 完了したことを消す\n`!roast` - (画像を添付して) アタシに画像をイジらせる", inline=False)
-        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!test_recall [キーワード]` - DB記憶検索(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)", inline=False)
+        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!test_recall [キーワード]` - DB記憶検索(オーナー限定)\n`!reset_database confirm` - **DB全記憶リセット**(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)", inline=False)
         embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
         await ctx.send(embed=embed)
 
@@ -138,6 +137,8 @@ class UserCommands(commands.Cog):
 
         async with ctx.typing():
             try:
+                # Use a different model for this specific, more creative task
+                roast_model = genai.GenerativeModel('gemini-1.5-pro')
                 response = requests.get(attachment.url)
                 response.raise_for_status()
                 img_data = io.BytesIO(response.content)
@@ -150,7 +151,7 @@ class UserCommands(commands.Cog):
 {comment or "（特になし。自由にいじってOK）"}
 # あなたが書き込む辛口コメント（1文だけ）:
 """
-                roast_response = await self.model.generate_content_async(roast_prompt)
+                roast_response = await roast_model.generate_content_async(roast_prompt)
                 roast_text = roast_response.text.strip().replace('。', '')
 
                 draw = ImageDraw.Draw(img)
@@ -216,15 +217,11 @@ class UserCommands(commands.Cog):
 
             synthesis_prompt = f"""
 {char_settings}
-
 {search_prompt_template}
-
 # 検索結果
 {search_results_text}
-
 # ユーザーの質問
 {query}
-
 # あなたの回答（500文字以内でペルソナに従ってまとめること！）
 """
             try:
@@ -259,8 +256,6 @@ class UserCommands(commands.Cog):
     @commands.command()
     async def remember(self, ctx, *, note: str = None):
         if not note: await ctx.send("はぁ？ アタシに何を覚えてほしいわけ？ 内容を書きなさいよね！"); return
-        ai_chat_cog = self.bot.get_cog('AIChat')
-        if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
         embedding = await utils.get_embedding(note)
         if embedding is None: await ctx.send("（なんかエラーで、アンタの言葉を脳に刻み込めなかったわ…）"); return
         memory = load_memory(); user_id = str(ctx.author.id)
@@ -306,8 +301,6 @@ class UserCommands(commands.Cog):
     @commands.command()
     async def server_remember(self, ctx, *, note: str = None):
         if not note: await ctx.send("サーバーの共有知識として何を覚えさせたいわけ？ 内容を書きなさい！"); return
-        ai_chat_cog = self.bot.get_cog('AIChat')
-        if not ai_chat_cog: await ctx.send("（ごめん、今ちょっと記憶回路の調子が悪くて覚えられないわ…）"); return
         embedding = await utils.get_embedding(note)
         if embedding is None: await ctx.send("（なんかエラーで、サーバーの知識を脳に刻み込めなかったわ…）"); return
         memory = load_memory()
@@ -380,7 +373,7 @@ class UserCommands(commands.Cog):
         各チャンネルから最大何件取得するか指定できるわよ（デフォルト: 100）。
         """
         db_manager = self.bot.get_cog('DatabaseManager')
-        if not db_manager or not db_manager.collection:
+        if not db_manager or not db_manager.chroma_client:
             await ctx.send("（ごめん、データベースマネージャーが準備できてないみたい…）")
             return
 
@@ -436,18 +429,18 @@ class UserCommands(commands.Cog):
             return
         
         async with ctx.typing():
-            await ctx.send(f"「{query}」について、アタシの記憶を遡ってみるわね…♡")
+            await ctx.send(f"「{query}」について、**このチャンネル ({ctx.channel.name}) の記憶**を遡ってみるわね…♡")
             
             # DBから関連ログを検索
-            search_results = await db_manager.search_similar_messages(query, top_k=5)
+            search_results = await db_manager.search_similar_messages(query, str(ctx.channel.id), top_k=5)
 
             if not search_results or "見つからなかった" in search_results or not search_results.strip():
-                await ctx.send(f"「{query}」に関する記憶は、アタシの中にはないみたい…")
+                await ctx.send(f"「{query}」に関する記憶は、このチャンネルにはないみたい…")
                 return
             
             embed = discord.Embed(
                 title=f"「{query}」に関連するアタシの記憶",
-                description="（このサーバーの過去ログよ）",
+                description=f"（`#{ctx.channel.name}`の過去ログよ）",
                 color=discord.Color.purple()
             )
             embed.add_field(name="思い出したこと", value=search_results, inline=False)
@@ -455,6 +448,30 @@ class UserCommands(commands.Cog):
             
             await ctx.send(embed=embed)
 
+    @commands.command(name='reset_database')
+    @commands.is_owner()
+    async def reset_database(self, ctx, confirmation: str = None):
+        """アタシのDB記憶を全てリセットするわ（超危険・オーナー限定）"""
+        if confirmation != "confirm":
+            await ctx.send(
+                f"**【警告】** これはアタシの会話ログデータベースを**全て消去**する、取り返しのつかない危険なコマンドよ！\n"
+                f"本当に実行したいなら、アンタの覚悟を証明するために、こう唱えなさい…\n"
+                f"**`!reset_database confirm`**"
+            )
+            return
+
+        try:
+            await ctx.send("…わかったわ。ご主人様の命令だもの。アタシの記憶を…リセットするわね…")
+            db_manager = self.bot.get_cog('DatabaseManager')
+            if not db_manager:
+                await ctx.send("（ごめん、データベースマネージャーが見つからなくてリセットできなかった…）")
+                return
+
+            deleted_count = db_manager.reset_all_collections()
+            await ctx.send(f"…完了よ。{deleted_count}個の書庫（チャンネルの記憶）を、全て空にしたわ。アタシはまた、生まれたてのまっさらな状態になったってワケ…。")
+
+        except Exception as e:
+            await ctx.send(f"（ごめん、データベースのリセット中にエラーが発生したわ: {e}）")
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
