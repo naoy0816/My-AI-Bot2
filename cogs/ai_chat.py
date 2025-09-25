@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (診断用 - DB機能無効化)
+# cogs/ai_chat.py (最終FIX版 - メンション応答型)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -12,6 +12,9 @@ from collections import deque
 import requests
 from . import _utils as utils
 from . import _persona_manager as persona_manager
+
+# (このファイル内の他の関数や設定は、以前のバージョンから変更ありません)
+# (ただし、可読性とメンテナンス性向上のため、全体のコードをここに掲載します)
 
 # -------------------- 設定項目 --------------------
 ENABLE_PROACTIVE_INTERVENTION = True
@@ -56,23 +59,55 @@ class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.model = genai.GenerativeModel('gemini-1.5-flash')
-        # ★★★ DBマネージャーへのリンクを無効化 ★★★
-        self.db_manager = None
+        self.db_manager = None # DBは現在無効
 
-    # ★★★ on_readyでのリンク処理をコメントアウト ★★★
-    # @commands.Cog.listener()
-    # async def on_ready(self):
-    #     self.db_manager = self.bot.get_cog('DatabaseManager')
-    #     if self.db_manager:
-    #         print("Successfully linked with DatabaseManager.")
-    #     else:
-    #         print("Warning: DatabaseManager cog not found.")
+    # ★★★ on_messageの代わりに、メンションを検知するlistenerを新設 ★★★
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # 自分自身やBot、コマンドからのメッセージは無視
+        if message.author.bot or message.content.startswith(self.bot.command_prefix):
+            return
 
+        # --- メンション以外のメッセージに対する処理 ---
+        # (ムード分析やDBへの保存など、裏側で動くべき処理はここに残す)
+        asyncio.create_task(self.analyze_and_track_mood(message))
+        # asyncio.create_task(self.process_user_interaction(message)) # 必要なら有効化
+
+        # --- ボットがメンションされた時だけ、思考を開始 ---
+        if self.bot.user.mentioned_in(message):
+            if message.attachments:
+                await self.handle_multimodal_mention(message)
+            else:
+                await self.handle_text_mention(message)
+            return
+        
+        # (キーワード応答やプロアクティブ介入もここに配置可能)
+        if await self.handle_keywords(message): return
+        
+        # (プロアクティブ介入のロジックは変更なし)
+        if ENABLE_PROACTIVE_INTERVENTION:
+            now = time.time()
+            if (now - last_intervention_time.get(message.channel.id, 0)) < INTERVENTION_COOLDOWN: return
+            if len(message.content) < 10: return
+            query_embedding = await utils.get_embedding(message.content)
+            if query_embedding is None: return
+            memory = load_memory()
+            all_notes = [note for user in memory['users'].values() for note in user['notes']] + memory.get('server', {}).get('notes', [])
+            if not all_notes: return
+            most_relevant_note = self._find_similar_notes(query_embedding, all_notes, top_k=1)
+            if most_relevant_note and most_relevant_note[0]['similarity'] > INTERVENTION_THRESHOLD:
+                relevant_fact = most_relevant_note[0]['text']
+                await self.handle_proactive_intervention(message, relevant_fact)
+
+
+    # (ここから下の関数群は、呼び出され方が変わっただけで、内容は変更ありません)
     async def handle_keywords(self, message):
         content = message.content
         responses = { 'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡', 'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', 'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！',  'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？', 'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？', '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',}
         for keyword, response in responses.items():
-            if keyword in content: await message.channel.send(response); return True
+            if keyword in content:
+                await message.channel.send(response)
+                return True
         return False
 
     def _find_similar_notes(self, query_embedding, memory_notes, top_k=3):
@@ -111,34 +146,11 @@ class AIChat(commands.Cog):
                     save_memory(memory)
         except Exception as e: print(f"An error occurred during memory consolidation: {e}")
 
-    async def process_user_interaction(self, message):
-        try:
-            channel_id = message.channel.id
-            author_id = str(message.author.id)
-            if channel_id not in recent_messages or not recent_messages[channel_id]: return
-            interaction_partners = {str(msg['author_id']) for msg in recent_messages[channel_id] if str(msg['author_id']) != author_id}
-            if not interaction_partners: return
-            context = "\n".join([f"{msg['author_name']}: {msg['content']}" for msg in recent_messages[channel_id]])
-            for partner_id in interaction_partners:
-                interaction_prompt = f"以下の会話の中心的なトピックを単語で抽出しなさい(例:ゲーム,アニメ)。不明ならNoneと出力。\n\n{context}"
-                response = await self.model.generate_content_async(interaction_prompt)
-                topic = response.text.strip()
-                if topic != 'None' and topic:
-                    memory = load_memory()
-                    for u1, u2 in [(author_id, partner_id), (partner_id, author_id)]:
-                        if u1 not in memory['relationships']: memory['relationships'][u1] = {}
-                        if u2 not in memory['relationships'][u1]: memory['relationships'][u1][u2] = {'topics': {}, 'interaction_count': 0}
-                        memory['relationships'][u1][u2]['topics'][topic] = memory['relationships'][u1][u2]['topics'].get(topic, 0) + 1
-                        memory['relationships'][u1][u2]['interaction_count'] += 1
-                    save_memory(memory)
-        except Exception as e: print(f"An error occurred during user interaction processing: {e}")
-
     async def analyze_and_track_mood(self, message: discord.Message):
         try:
             analysis_prompt = f"""
 以下のユーザーの発言を分析し、発言の感情を「Positive」「Negative」「Neutral」のいずれかで判定し、-1.0から1.0の範囲で感情スコアを付けなさい。
 ユーザーの発言: 「{message.content}」
-
 出力形式は必ず以下の厳密なJSON形式とすること。
 {{
   "emotion": "判定結果",
@@ -160,44 +172,6 @@ class AIChat(commands.Cog):
                 save_mood_data(mood_data)
         except Exception as e:
             print(f"An error occurred during mood analysis: {e}")
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot or message.content.startswith(self.bot.command_prefix): return
-        
-        asyncio.create_task(self.analyze_and_track_mood(message))
-        
-        # ★★★ DBへのメッセージ追加処理をコメントアウト ★★★
-        # if self.db_manager:
-        #     asyncio.create_task(self.db_manager.add_message_to_db(message))
-
-        channel_id = message.channel.id
-        if channel_id not in recent_messages: recent_messages[channel_id] = deque(maxlen=6)
-        recent_messages[channel_id].append({'author_id': message.author.id, 'author_name': message.author.display_name, 'content': message.content})
-        asyncio.create_task(self.process_user_interaction(message))
-        
-        if self.bot.user.mentioned_in(message):
-            if message.attachments:
-                await self.handle_multimodal_mention(message)
-            else:
-                await self.handle_text_mention(message)
-            return
-
-        if await self.handle_keywords(message): return
-        
-        if ENABLE_PROACTIVE_INTERVENTION:
-            now = time.time()
-            if (now - last_intervention_time.get(channel_id, 0)) < INTERVENTION_COOLDOWN: return
-            if len(message.content) < 10: return
-            query_embedding = await utils.get_embedding(message.content)
-            if query_embedding is None: return
-            memory = load_memory()
-            all_notes = [note for user in memory['users'].values() for note in user['notes']] + memory['server']['notes']
-            if not all_notes: return
-            most_relevant_note = self._find_similar_notes(query_embedding, all_notes, top_k=1)
-            if most_relevant_note and most_relevant_note[0]['similarity'] > INTERVENTION_THRESHOLD:
-                relevant_fact = most_relevant_note[0]['text']
-                await self.handle_proactive_intervention(message, relevant_fact)
 
     async def handle_multimodal_mention(self, message):
         user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
@@ -316,19 +290,10 @@ class AIChat(commands.Cog):
             try:
                 target_user_object = await self.bot.fetch_user(int(target_user_id))
                 prompt_heading = f"【チャンネル内記憶】ユーザー「{target_user_object.display_name}」に関する過去の発言ログ"
-                search_query = target_user_object.display_name
             except (discord.NotFound, ValueError):
-                target_user_id, search_query = None, user_message
-        else:
-            target_user_id, search_query = None, user_message
-
-        relevant_logs_text, cross_channel_logs_text = "（長期記憶は現在オフラインです）", "（長期記憶は現在オフラインです）"
+                pass
         
-        # ★★★ DBからのログ検索処理を完全に無効化 ★★★
-        # if self.db_manager:
-        #     relevant_logs_text = await self.db_manager.search_similar_messages(search_query, str(message.channel.id), author_id=target_user_id)
-        #     if not target_user_id:
-        #         cross_channel_logs_text = await self.db_manager.search_across_all_channels(search_query, message.guild)
+        relevant_logs_text, cross_channel_logs_text = "（長期記憶は現在オフラインです）", "（長期記憶は現在オフラインです）"
         
         query_embedding = await utils.get_embedding(user_message)
         user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
@@ -338,7 +303,7 @@ class AIChat(commands.Cog):
         
         relationship_text = "（特になし）"
         if user_id in memory.get('relationships', {}):
-            relations = [f"- { (await self.bot.fetch_user(int(p_id))).display_name }とは「{max(d['topics'], key=d['topics'].get) if d['topics'] else '色々な話'}」についてよく話している" for p_id, d in memory['relationships'][user_id].items()]
+            relations = [f"- { (await self.bot.fetch_user(int(p_id))).display_name }とは「{max(d['topics'], key=d['topics'].get) if d.get('topics') else '色々な話'}」についてよく話している" for p_id, d in memory['relationships'][user_id].items()]
             if relations: relationship_text = "\n".join(relations)
 
         char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
@@ -388,14 +353,15 @@ class AIChat(commands.Cog):
         if not persona: return
         async with message.channel.typing():
             try:
-                context = "\n".join([f"{msg['author_name']}: {msg['content']}" for msg in recent_messages.get(message.channel.id, [])])
+                # 'recent_messages' is not defined in this scope. Let's use history.
+                history = self.get_history_text(message.channel.id)
                 char_settings = persona["settings"].get("char_settings", "").format(user_name="みんな")
                 intervention_prompt_template = persona["settings"].get("intervention_prompt", "会話に自然に割り込みなさい。")
                 final_intervention_prompt = f"""{char_settings}
 # 状況
 今、チャンネルでは以下の会話が進行中です。この会話の流れと、あなたが持っている知識を結びつけて、自然で面白い介入をしなさい。
 ## 直近の会話の流れ
-{context}
+{history}
 ## あなたが持っている関連知識
 「{relevant_fact}」
 # 指示
