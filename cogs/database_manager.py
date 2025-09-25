@@ -11,7 +11,7 @@ import traceback
 DB_PATH = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.') + "/chroma_db"
 COLLECTION_NAME_PREFIX = "channel_history_"
 # ★★★ 検索エンジンの"視力"を調整！ この数値を下げて、より厳密な検索をするようにしたわ ★★★
-DISTANCE_THRESHOLD = 0.75
+DISTANCE_THRESHOLD = 0.77
 # ----------------------------------------------------
 
 class DatabaseManager(commands.Cog):
