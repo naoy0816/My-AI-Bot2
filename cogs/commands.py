@@ -1,4 +1,4 @@
-# cogs/commands.py (完全版・最終デバッグモード)
+# cogs/commands.py (最終版・完全コード)
 import discord
 from discord.ext import commands
 import json
@@ -399,7 +399,7 @@ class UserCommands(commands.Cog):
                         print(f"[BACKFILL] スキップ(BOT): {message.author.name}「{message.content[:30]}...」")
                         continue
                     
-                    if not message.content or len(message.content) < 5:
+                    if not message.content or len(message.content) < 2:
                         print(f"[BACKFILL] スキップ(短い/空): {message.author.name}「{message.content[:30] if message.content else ''}...」")
                         continue
                     
