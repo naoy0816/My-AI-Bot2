@@ -1,4 +1,4 @@
-# cogs/commands.py (スラッシュコマンド完全移行版)
+# cogs/commands.py (スラッシュコマンド完全移行版 - 修正済み)
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -341,21 +341,19 @@ class UserCommands(commands.Cog):
         await interaction.response.send_message(f"しょーがないから、過去ログ学習を始めるわよ！ 各チャンネル、最大{limit}件まで遡ってアタシの記憶に刻んであげる♡")
         
         start_time = time.time()
-        # ( ... backfill_logsの実際の処理は長いため、ここでは省略せずに記述 ... )
         total_processed = 0
         total_added = 0
         text_channels = [ch for ch in interaction.guild.text_channels if ch.permissions_for(interaction.guild.me).read_message_history]
+        
         for channel in text_channels:
-            # ... (中略) ...
             try:
                 async for message in channel.history(limit=limit):
-                    # ... (中略) ...
+                    total_processed += 1
                     result = await db_manager.add_message_to_db(message)
                     if result:
                         total_added += 1
-                    total_processed +=1
-            except Exception:
-                pass # ...
+            except Exception as e:
+                print(f"Error backfilling channel {channel.name}: {e}")
         
         duration = round(time.time() - start_time, 2)
         await interaction.followup.send(f"過去ログ学習、完了したわよ！\n**処理したメッセージ:** {total_processed}件\n**新しく記憶に追加したメッセージ:** {total_added}件\n**かかった時間:** {duration}秒")
@@ -367,9 +365,29 @@ class UserCommands(commands.Cog):
         target_channel = channel or interaction.channel
         mood_data_all = load_mood_data()
         channel_mood = mood_data_all.get(str(target_channel.id))
-        # ( ... moodコマンドの応答ロジック ... )
-        # ... (省略) ...
-        embed = discord.Embed(title=f"🧠 #{target_channel.name} のムード分析 🧠")
+
+        if not channel_mood:
+            await interaction.response.send_message(f"#{target_channel.name} のムードデータはまだ記録されてないみたいね。")
+            return
+
+        avg_score = channel_mood.get("average", 0.0)
+        mood_text = "😐 ニュートラル"
+        color = discord.Color.default()
+        if avg_score > 0.2:
+            mood_text = "😊 ポジティブ"
+            color = discord.Color.green()
+        elif avg_score < -0.2:
+            mood_text = "😠 ネガティブ"
+            color = discord.Color.red()
+        
+        embed = discord.Embed(
+            title=f"🧠 #{target_channel.name} のムード分析 🧠",
+            description=f"現在の雰囲気: **{mood_text}**",
+            color=color
+        )
+        embed.add_field(name="平均ムードスコア", value=f"`{avg_score:.4f}`", inline=True)
+        embed.add_field(name="記録されたスコア件数", value=f"`{len(channel_mood.get('scores', []))}`件 / 直近10件", inline=True)
+        embed.set_footer(text="スコアは -1.0 (ネガティブ) から 1.0 (ポジティブ) の範囲よ。")
         await interaction.response.send_message(embed=embed)
 
 
