@@ -1,4 +1,4 @@
-# cogs/commands.py (診断用 - DB依存コマンド無効化)
+v# cogs/commands.py (最終FIX版 - エラーハンドリング強化)
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -14,27 +14,22 @@ from . import _persona_manager as persona_manager
 from .ai_chat import load_mood_data
 import traceback
 
-# -------------------- ヘルパー関数 --------------------
+# (ヘルパー関数は変更なし)
 def load_memory():
     try:
         with open(os.path.join(utils.DATA_DIR, 'bot_memory.json'), 'r', encoding='utf-8') as f: return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {"users": {}, "server": {"notes": []}}
-
 def save_memory(data):
     with open(os.path.join(utils.DATA_DIR, 'bot_memory.json'), 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
-
 def load_todos():
     try:
         with open(os.path.join(utils.DATA_DIR, 'todos.json'), 'r', encoding='utf-8') as f: return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
-
 def save_todos(data):
     with open(os.path.join(utils.DATA_DIR, 'todos.json'), 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
-# ----------------------------------------------------
 
-# ★★★ オーナーだけが使えるコマンドかチェックする関数 ★★★
 async def is_owner(interaction: discord.Interaction) -> bool:
     is_owner_check = await interaction.client.is_owner(interaction.user)
     if not is_owner_check:
@@ -48,7 +43,22 @@ class UserCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.model = genai.GenerativeModel('gemini-1.5-flash')
+        # ★★★ ここからが重要！ Cog全体のエラーハンドラを追加 ★★★
+        self.tree = self.bot.tree
+        self.tree.on_error = self.on_app_command_error
 
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """スラッシュコマンドでエラーが発生したときに呼び出される"""
+        print(f"An error occurred in a slash command: {error}")
+        traceback.print_exc()
+        
+        error_message = f"（ごめん、コマンドの処理中にエラーが出たわ…アンタのせいじゃない？: `{error}`）"
+        if interaction.response.is_done():
+            await interaction.followup.send(error_message, ephemeral=True)
+        else:
+            await interaction.response.send_message(error_message, ephemeral=True)
+
+    # (ここから下のコマンド定義は変更ありません)
     # ★★★ ヘルプコマンド ★★★
     @app_commands.command(name="help", description="アタシが使えるコマンドの一覧よ♡")
     async def help_command(self, interaction: discord.Interaction):
@@ -123,42 +133,39 @@ class UserCommands(commands.Cog):
             return
 
         await interaction.response.defer()
-        try:
-            roast_model = genai.GenerativeModel('gemini-1.5-pro')
-            img_data = await image.read()
-            img = Image.open(io.BytesIO(img_data)).convert("RGBA")
-            roast_prompt = f"""
+        roast_model = genai.GenerativeModel('gemini-1.5-pro')
+        img_data = await image.read()
+        img = Image.open(io.BytesIO(img_data)).convert("RGBA")
+        roast_prompt = f"""
 あなたは、ユーザーが投稿した画像に、生意気で面白いコメントを入れる天才美少女「メスガキちゃん」です。
 ユーザーからの指示: {comment or "（特になし）"}
 あなたが書き込む辛口コメント（1文だけ）:
 """
-            roast_response = await roast_model.generate_content_async(roast_prompt)
-            roast_text = roast_response.text.strip().replace('。', '')
-            draw = ImageDraw.Draw(img)
-            font_size = int(min(img.width, img.height) * 0.1)
-            try:
-                font = ImageFont.truetype("arial.ttf", font_size)
-            except IOError:
-                font = ImageFont.load_default()
-            try:
-                bbox = draw.textbbox((0, 0), roast_text, font=font)
-                text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            except TypeError:
-                text_width, text_height = draw.textsize(roast_text, font=font)
-            x = img.width - text_width - int(img.width * 0.05)
-            y = img.height - text_height - int(img.height * 0.05)
-            shadow_color="white"
-            draw.text((x-2, y-2), roast_text, font=font, fill=shadow_color)
-            draw.text((x+2, y-2), roast_text, font=font, fill=shadow_color)
-            draw.text((x-2, y+2), roast_text, font=font, fill=shadow_color)
-            draw.text((x+2, y+2), roast_text, font=font, fill=shadow_color)
-            draw.text((x, y), roast_text, font=font, fill="black")
-            final_buffer = io.BytesIO()
-            img.save(final_buffer, format='PNG')
-            final_buffer.seek(0)
-            await interaction.followup.send(file=discord.File(final_buffer, 'roast.png'))
-        except Exception as e:
-            await interaction.followup.send(f"（うぅ…画像の処理中にエラーが出たわ…: {e}）")
+        roast_response = await roast_model.generate_content_async(roast_prompt)
+        roast_text = roast_response.text.strip().replace('。', '')
+        draw = ImageDraw.Draw(img)
+        font_size = int(min(img.width, img.height) * 0.1)
+        try:
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except IOError:
+            font = ImageFont.load_default()
+        try:
+            bbox = draw.textbbox((0, 0), roast_text, font=font)
+            text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        except TypeError:
+            text_width, text_height = draw.textsize(roast_text, font=font)
+        x = img.width - text_width - int(img.width * 0.05)
+        y = img.height - text_height - int(img.height * 0.05)
+        shadow_color="white"
+        draw.text((x-2, y-2), roast_text, font=font, fill=shadow_color)
+        draw.text((x+2, y-2), roast_text, font=font, fill=shadow_color)
+        draw.text((x-2, y+2), roast_text, font=font, fill=shadow_color)
+        draw.text((x+2, y+2), roast_text, font=font, fill=shadow_color)
+        draw.text((x, y), roast_text, font=font, fill="black")
+        final_buffer = io.BytesIO()
+        img.save(final_buffer, format='PNG')
+        final_buffer.seek(0)
+        await interaction.followup.send(file=discord.File(final_buffer, 'roast.png'))
 
     @app_commands.command(name="search", description="ペルソナを反映してWeb検索するわよ")
     @app_commands.describe(query="何をググってほしいわけ？")
@@ -178,11 +185,9 @@ class UserCommands(commands.Cog):
         char_settings = persona["settings"].get("char_settings", "").format(user_name=interaction.user.display_name)
         search_prompt_template = persona["settings"].get("search_prompt", "# 指示\n検索結果を元に応答しなさい。")
         synthesis_prompt = f"{char_settings}\n{search_prompt_template}\n# 検索結果\n{search_results_text}\n# ユーザーの質問\n{query}\n# あなたの回答:"
-        try:
-            response = await self.model.generate_content_async(synthesis_prompt)
-            await interaction.followup.send(response.text)
-        except Exception as e: 
-            await interaction.followup.send(f"（頭脳がショートしたわ…: {e}）")
+        
+        response = await self.model.generate_content_async(synthesis_prompt)
+        await interaction.followup.send(response.text)
 
     # ★★★ TODOコマンドグループ ★★★
     todo_group = app_commands.Group(name="todo", description="アンタがやるべきことを管理してあげる♡")
@@ -294,21 +299,21 @@ class UserCommands(commands.Cog):
         loaded_cogs, failed_cogs = [], []
         for filename in os.listdir('./cogs'):
             if filename.endswith('.py') and not filename.startswith('_'):
-                cog_name = f'cogs.{filename[:-3]}'
-                try:
+                 if filename == 'database_manager.py': continue
+                 cog_name = f'cogs.{filename[:-3]}'
+                 try:
                     await self.bot.reload_extension(cog_name)
                     loaded_cogs.append(f"`{filename}`")
-                except commands.ExtensionNotLoaded:
+                 except commands.ExtensionNotLoaded:
                     await self.bot.load_extension(cog_name)
                     loaded_cogs.append(f"`{filename}` (新規)")
-                except Exception as e:
+                 except Exception as e:
                     failed_cogs.append(f"`{filename}` ({e})")
         response = "機能の再読み込みが完了したわよ♡\n"
         if loaded_cogs: response += f"✅ **成功:** {', '.join(loaded_cogs)}\n"
         if failed_cogs: response += f"❌ **失敗:** {', '.join(failed_cogs)}"
         await interaction.followup.send(response)
 
-    # ★★★ 過去ログ学習コマンドを一時的に無効化 ★★★
     @app_commands.command(name="backfill_logs", description="（現在DB機能が無効なため使用不可）")
     @app_commands.describe(limit="各チャンネルから最大何件取得する？（デフォルト: 100）")
     @app_commands.check(is_owner)
