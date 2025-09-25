@@ -1,4 +1,4 @@
-# cogs/commands.py (完全版・DB診断機能付き)
+# cogs/commands.py (完全版・最終デバッグモード)
 import discord
 from discord.ext import commands
 import json
@@ -10,6 +10,7 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from . import _utils as utils
 from . import _persona_manager as persona_manager
+import traceback # エラー詳細表示のために追加
 
 # -------------------- ファイルパス設定 --------------------
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
@@ -377,7 +378,7 @@ class UserCommands(commands.Cog):
             await ctx.send("（ごめん、データベースマネージャーが準備できてないみたい…）")
             return
 
-        await ctx.send(f"しょーがないから、過去ログ学習を始めるわよ！ 各チャンネル、最大{limit_per_channel}件まで遡ってアタシの記憶に刻んであげる♡")
+        await ctx.send(f"しょーがないから、過去ログ学習を始めるわよ！ 各チャンネル、最大{limit_per_channel}件まで遡ってアタシの記憶に刻んであげる♡ 処理の詳細はコンソールログを見なさい！")
         
         start_time = time.time()
         total_processed = 0
@@ -386,27 +387,59 @@ class UserCommands(commands.Cog):
         text_channels = [ch for ch in ctx.guild.text_channels if ch.permissions_for(ctx.guild.me).read_message_history]
 
         for channel in text_channels:
+            print(f"\n--- Processing channel: #{channel.name} ---")
             processed_in_channel = 0
             added_in_channel = 0
             try:
-                print(f"Processing channel: {channel.name}")
                 async for message in channel.history(limit=limit_per_channel):
-                    if message.author.bot or len(message.content) < 5:
+                    processed_in_channel += 1
+                    
+                    # ★★★ ここから詳細なデバッグログ出力 ★★★
+                    if message.author.bot:
+                        print(f"[BACKFILL] スキップ(BOT): {message.author.name}「{message.content[:30]}...」")
                         continue
                     
-                    result = await db_manager.add_message_to_db(message)
-                    if result:
-                        added_in_channel += 1
+                    if not message.content or len(message.content) < 5:
+                        print(f"[BACKFILL] スキップ(短い/空): {message.author.name}「{message.content[:30] if message.content else ''}...」")
+                        continue
                     
-                    processed_in_channel += 1
-                
+                    collection = db_manager.get_channel_collection(str(message.channel.id))
+                    if not collection:
+                        print(f"[BACKFILL] 致命的エラー: チャンネル {channel.name} のコレクションを取得できませんでした。")
+                        continue
+
+                    existing = collection.get(ids=[str(message.id)])
+                    if existing and existing['ids']:
+                        continue
+                    
+                    embedding = await utils.get_embedding(message.content)
+                    if not embedding:
+                        print(f"[BACKFILL] スキップ(ベクトル化失敗): {message.author.name}「{message.content[:30]}...」")
+                        continue
+
+                    metadata = {
+                        "author_id": str(message.author.id),
+                        "author_name": message.author.name,
+                        "timestamp": message.created_at.isoformat()
+                    }
+                    collection.add(
+                        embeddings=[embedding],
+                        documents=[message.content],
+                        metadatas=[metadata],
+                        ids=[str(message.id)]
+                    )
+                    print(f"[BACKFILL] 登録成功: {message.author.name}「{message.content[:30]}...」")
+                    added_in_channel += 1
+                    # ★★★ デバッグログここまで ★★★
+
                 total_processed += processed_in_channel
                 total_added += added_in_channel
 
             except discord.Forbidden:
-                print(f"Skipping channel {channel.name}: No permissions.")
+                print(f"Skipping channel #{channel.name}: No permissions.")
             except Exception as e:
-                print(f"Error processing channel {channel.name}: {e}")
+                print(f"FATAL Error processing channel #{channel.name}: {e}")
+                traceback.print_exc()
 
         end_time = time.time()
         duration = round(end_time - start_time, 2)
@@ -431,7 +464,6 @@ class UserCommands(commands.Cog):
         async with ctx.typing():
             await ctx.send(f"「{query}」について、**このチャンネル ({ctx.channel.name}) の記憶**を遡ってみるわね…♡")
             
-            # DBから関連ログを検索
             search_results = await db_manager.search_similar_messages(query, str(ctx.channel.id), top_k=5)
 
             if not search_results or "見つからなかった" in search_results or not search_results.strip():
@@ -473,7 +505,6 @@ class UserCommands(commands.Cog):
         except Exception as e:
             await ctx.send(f"（ごめん、データベースのリセット中にエラーが発生したわ: {e}）")
 
-    # ★★★ DB診断コマンドを追加 ★★★
     @commands.command(name='db_status')
     @commands.is_owner()
     async def db_status(self, ctx):
