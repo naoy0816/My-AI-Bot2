@@ -45,3 +45,10 @@ lxml==5.2.2
 Pillow==10.4.0
 # ★★★ ここにいたおデブちゃんは削除したわよ！ ★★★
 chromadb==0.5.0
+# ボイスチャンネル機能に必要
+PyNaCl==1.5.0
+# 音声認識(Whisper)と通信に必要
+openai==1.35.13
+aiohttp==3.9.5
+# VOICEVOXとの連携に必要
+websockets==12.0
