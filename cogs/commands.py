@@ -1,4 +1,4 @@
-# cogs/commands.py (スラッシュコマンド完全移行版 - タイムアウト対策済み)
+# cogs/commands.py (診断用 - DB依存コマンド無効化)
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -308,29 +308,13 @@ class UserCommands(commands.Cog):
         if failed_cogs: response += f"❌ **失敗:** {', '.join(failed_cogs)}"
         await interaction.followup.send(response)
 
-    @app_commands.command(name="backfill_logs", description="サーバーの過去ログをDBに保存するわ（オーナー限定）")
+    # ★★★ 過去ログ学習コマンドを一時的に無効化 ★★★
+    @app_commands.command(name="backfill_logs", description="（現在DB機能が無効なため使用不可）")
     @app_commands.describe(limit="各チャンネルから最大何件取得する？（デフォルト: 100）")
     @app_commands.check(is_owner)
     async def backfill_logs(self, interaction: discord.Interaction, limit: int = 100):
-        await interaction.response.defer()
-        db_manager = self.bot.get_cog('DatabaseManager')
-        if not db_manager or not db_manager.chroma_client:
-            await interaction.followup.send("（ごめん、データベースマネージャーが準備できてないみたい…）", ephemeral=True)
-            return
-        
-        start_time = time.time()
-        total_processed, total_added = 0, 0
-        text_channels = [ch for ch in interaction.guild.text_channels if ch.permissions_for(interaction.guild.me).read_message_history]
-        for channel in text_channels:
-            try:
-                async for message in channel.history(limit=limit):
-                    total_processed += 1
-                    if await db_manager.add_message_to_db(message):
-                        total_added += 1
-            except Exception as e:
-                print(f"Error backfilling channel {channel.name}: {e}")
-        duration = round(time.time() - start_time, 2)
-        await interaction.followup.send(f"過去ログ学習、完了！\n**処理:** {total_processed}件, **新規追加:** {total_added}件, **時間:** {duration}秒")
+        await interaction.response.send_message("ごめん、今【プロジェクト・アーク】のコアが無効化されてて、このコマンドは使えないの…", ephemeral=True)
+        return
 
     @app_commands.command(name="mood", description="チャンネルのムード状況を表示するわ（オーナー限定）")
     @app_commands.describe(channel="どのチャンネルのムードが知りたいわけ？（任意）")
