@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (真・最終完成版)
+# cogs/ai_chat.py (完全版)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -7,6 +7,7 @@ import json
 import asyncio
 import numpy as np
 import time
+import re
 from collections import deque
 import requests
 from . import _utils as utils
@@ -42,7 +43,7 @@ recent_messages = {}
 class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+        # genai.configureはbot.pyのsetup_hookで実行
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         self.db_manager = None
 
@@ -170,9 +171,11 @@ class AIChat(commands.Cog):
 
         async with message.channel.typing():
             try:
+                # Use an executor for the blocking requests call
                 response = await self.bot.loop.run_in_executor(None, requests.get, attachment.url)
                 response.raise_for_status()
                 file_data = response.content
+                
                 media_blob = {"mime_type": mime_type, "data": file_data}
 
                 multimodal_prompt_template = persona["settings"].get("multimodal_prompt", "# 指示\nメディアを見て応答しなさい。")
@@ -183,8 +186,11 @@ class AIChat(commands.Cog):
                     media_blob
                 ]
 
-                response = await self.model.generate_content_async(prompt_parts)
+                # Use the correct model for multimodal
+                multimodal_model = genai.GenerativeModel('gemini-1.5-pro')
+                response = await multimodal_model.generate_content_async(prompt_parts)
                 await message.channel.send(response.text)
+
             except Exception as e:
                 await message.channel.send(f"（うぅ…アンタのファイルを見ようとしたら、アタシの目がぁぁ…！: {e}）")
 
@@ -274,7 +280,6 @@ class AIChat(commands.Cog):
 """
         await self.generate_and_send_response(message, final_prompt, user_message, False)
 
-    # ★★★ ここが思考回路の核心！ 最終チューニング版よ！ ★★★
     async def build_final_prompt(self, message, user_message, decision_data, persona):
         user_id = str(message.author.id)
         memory = load_memory()
@@ -283,7 +288,7 @@ class AIChat(commands.Cog):
         # --- 新しい記憶システムからの情報取得 ---
         relevant_logs_text = "（特になし）"
         if self.db_manager:
-            relevant_logs_text = await self.db_manager.search_similar_messages(user_message)
+            relevant_logs_text = await self.db_manager.search_similar_messages(user_message, str(message.channel.id), author_id=None) # author_idは一旦None
         # ------------------------------------
 
         # --- 古い記憶システムからの情報取得（補助的に使うわ） ---
@@ -309,7 +314,6 @@ class AIChat(commands.Cog):
 
         char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
 
-        # ★★★ ここが最終チューニングよ！ 記憶の優先度を明確にしたわ！ ★★★
         return f"""
 {char_settings}
 ---
@@ -321,7 +325,7 @@ class AIChat(commands.Cog):
 ---
 # 記憶情報（これらの情報を統合して、人間のように自然で文脈に合った応答を生成すること）
 
-## 【最優先】関連性の高い過去の会話ログ
+## 【最優先】このチャンネルでの関連性の高い過去の会話ログ
 このサーバーの過去の会話で、今の話題に最も関連するものです。最優先で参考にし、会話に深みを持たせなさい。
 {relevant_logs_text}
 
