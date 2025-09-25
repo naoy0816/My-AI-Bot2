@@ -1,4 +1,4 @@
-c# cogs/ai_chat.py (最終完全版 - 神の視点モード搭載)
+# cogs/ai_chat.py (最終完全版 - 神の視点モード搭載)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
