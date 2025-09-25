@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (完全版)
+# cogs/ai_chat.py (最終進化版)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -171,7 +171,6 @@ class AIChat(commands.Cog):
 
         async with message.channel.typing():
             try:
-                # Use an executor for the blocking requests call
                 response = await self.bot.loop.run_in_executor(None, requests.get, attachment.url)
                 response.raise_for_status()
                 file_data = response.content
@@ -185,8 +184,7 @@ class AIChat(commands.Cog):
                     f"{char_settings}\n{multimodal_prompt_template}\n\n# ユーザーのテキスト\n「{user_message or '（…無言でコレをアタシに見せてきたわ）'}」\n\n# あなたの応答（500文字以内でペルソナに従ってまとめること！）:",
                     media_blob
                 ]
-
-                # Use the correct model for multimodal
+                
                 multimodal_model = genai.GenerativeModel('gemini-1.5-pro')
                 response = await multimodal_model.generate_content_async(prompt_parts)
                 await message.channel.send(response.text)
@@ -214,7 +212,8 @@ class AIChat(commands.Cog):
             if decision_data.get("ACTION") == 'SEARCH':
                 await self.execute_search_and_respond(message, user_message, decision_data.get("QUERY"), persona)
             else:
-                final_prompt = await self.build_final_prompt(message, user_message, decision_data, persona)
+                target_user_id = decision_data.get("TARGET_USER_ID")
+                final_prompt = await self.build_final_prompt(message, user_message, decision_data, persona, target_user_id)
                 await self.generate_and_send_response(message, final_prompt, user_message, True)
 
     def build_meta_thinking_prompt(self, message, user_message, persona):
@@ -222,20 +221,27 @@ class AIChat(commands.Cog):
         persona_name = persona.get("name", "AI")
         persona_desc = persona.get("description", "応答します。")
 
+        mentioned_users_text = "（なし）"
+        if message.mentions:
+            mentioned_users_text = "\n".join([f"- {user.display_name} (ID: {user.id})" for user in message.mentions if not user.bot and user.id != self.bot.user.id])
+
         return f"""
 あなたは、「{persona_name}」({persona_desc})の思考を司る「メタAI」です。
 ユーザーのメッセージを分析し、次の行動を【1回の思考で】決定してください。
 # 思考プロセス
-1. **意図と感情の分析:** ユーザーのメッセージ（「{user_message}」）と会話履歴を読み解き、真の意図（情報要求、共感、暇つぶし等）と感情（喜び、好奇心、疲れ等）を把握する。
-2. **行動決定:** 意図に基づき、取るべき行動を `SEARCH` (Web検索が必要) か `ANSWER` (自己知識で応答) のどちらかに決定する。
-3. **戦略立案 (ANSWERの場合):** `ANSWER` の場合、あなたの性格とユーザーの感情を考慮し、最適な応答戦略を `TEASE`, `HELP_RELUCTANTLY`, `TSUNDERE_CARE`, `SHOW_OFF` などから選択する。
-4. **クエリ/要点生成:**
+1. **意図と感情の分析:** ユーザーのメッセージ（「{user_message}」）を読み解き、真の意図と感情を把握する。
+2. **【重要】特定人物に関する質問か判断:** メッセージは、特定のユーザーについて尋ねるものか？ メンションリストを参考に判断し、もしそうならそのユーザーのIDを特定する。そうでなければ `None` とする。
+3. **行動決定:** 意図に基づき、取るべき行動を `SEARCH` (Web検索) か `ANSWER` (自己知識で応答) に決定する。
+4. **戦略立案 (ANSWERの場合):** あなたの性格とユーザーの感情を考慮し、最適な応答戦略を `TEASE`, `SUMMARIZE_USER`, `HELP_RELUCTANTLY` などから選択する。
+5. **クエリ/要点生成:**
     - `SEARCH` の場合: 最適な検索クエリを生成する。
-    - `ANSWER` の場合: 応答に含めるべき重要な要点を3つ以内でリストアップする。
+    - `ANSWER` の場合: 応答に含めるべき重要な要点をリストアップする。
 # 分析対象
 - ユーザー名: {user_name}
 - 会話履歴: {self.get_history_text(message.channel.id)}
 - ユーザーのメッセージ: 「{user_message}」
+- メッセージ内でメンションされたユーザー:
+{mentioned_users_text}
 # 出力形式
 思考プロセスは出力せず、結果だけを以下の厳密な形式で出力すること。
 [ACTION:決定した行動]
@@ -244,6 +250,7 @@ class AIChat(commands.Cog):
 [INTENT:分析した意図]
 [STRATEGY:ANSWERの場合の応答戦略]
 [POINTS:ANSWERの場合の要点（カンマ区切り）]
+[TARGET_USER_ID:特定人物に関する質問の場合、そのユーザーのID。それ以外はNone]
 """
 
     def parse_decision_text(self, text):
@@ -280,18 +287,33 @@ class AIChat(commands.Cog):
 """
         await self.generate_and_send_response(message, final_prompt, user_message, False)
 
-    async def build_final_prompt(self, message, user_message, decision_data, persona):
+    async def build_final_prompt(self, message, user_message, decision_data, persona, target_user_id: str = None):
         user_id = str(message.author.id)
         memory = load_memory()
         user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
         
         # --- 新しい記憶システムからの情報取得 ---
+        prompt_heading = "【最優先】このチャンネルでの関連性の高い過去の会話ログ"
+        target_user_object = None
+
+        if target_user_id and target_user_id != 'None':
+            try:
+                target_user_object = await self.bot.fetch_user(int(target_user_id))
+                prompt_heading = f"【最優先】ユーザー「{target_user_object.display_name}」に関する過去の発言ログ"
+                search_query = target_user_object.display_name
+            except (discord.NotFound, ValueError):
+                target_user_id = None
+                search_query = user_message 
+        else:
+            target_user_id = None # 明示的にNoneに設定
+            search_query = user_message
+
         relevant_logs_text = "（特になし）"
         if self.db_manager:
-            relevant_logs_text = await self.db_manager.search_similar_messages(user_message, str(message.channel.id), author_id=None) # author_idは一旦None
+            relevant_logs_text = await self.db_manager.search_similar_messages(search_query, str(message.channel.id), author_id=target_user_id)
         # ------------------------------------
 
-        # --- 古い記憶システムからの情報取得（補助的に使うわ） ---
+        # --- 古い記憶システムからの情報取得 ---
         query_embedding = await utils.get_embedding(user_message)
         user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
         server_notes_all = memory.get('server', {}).get('notes', [])
@@ -299,7 +321,6 @@ class AIChat(commands.Cog):
         relevant_server_notes = [note['text'] for note in self._find_similar_notes(query_embedding, server_notes_all)]
         user_notes_text = "\n".join([f"- {note}" for note in relevant_user_notes]) or "（特になし）"
         server_notes_text = "\n".join([f"- {note}" for note in relevant_server_notes]) or "（特になし）"
-        # ----------------------------------------------------
         
         relationship_text = "（特になし）"
         if user_id in memory.get('relationships', {}):
@@ -314,7 +335,7 @@ class AIChat(commands.Cog):
 
         char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
 
-        return f"""
+        final_prompt = f"""
 {char_settings}
 ---
 # ★★★ アタシの思考と応答戦略 ★★★
@@ -325,8 +346,7 @@ class AIChat(commands.Cog):
 ---
 # 記憶情報（これらの情報を統合して、人間のように自然で文脈に合った応答を生成すること）
 
-## 【最優先】このチャンネルでの関連性の高い過去の会話ログ
-このサーバーの過去の会話で、今の話題に最も関連するものです。最優先で参考にし、会話に深みを持たせなさい。
+## {prompt_heading}
 {relevant_logs_text}
 
 ## 【参考】直前の会話
@@ -338,9 +358,11 @@ class AIChat(commands.Cog):
 - サーバーの人間関係: {relationship_text}
 ---
 以上の全てを完璧に理解し、立案した「応答戦略」に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
+**【重要】** もしこれが特定のユーザーに関する質問（ログ見出しに名前が表示されている）なら、提示されたログからその人がどんな人物で、何に興味があるかを**要約して**答えなさい。
 **【最重要命令】全返答は500文字以内で簡潔にまとめること。**
 # あなたの返答:
 """
+        return final_prompt
 
     async def generate_and_send_response(self, message, final_prompt, user_message, should_consolidate_memory):
         try:
