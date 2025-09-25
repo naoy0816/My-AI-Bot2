@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (最終進化版)
+# cogs/ai_chat.py (感情分析機能搭載版)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -22,6 +22,7 @@ INTERVENTION_COOLDOWN = 300
 # ファイルパス設定
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
+MOOD_FILE = os.path.join(DATA_DIR, 'channel_mood.json') # ★★★ 新しい記憶ファイルを追加 ★★★
 
 def load_memory():
     try:
@@ -34,6 +35,18 @@ def load_memory():
 
 def save_memory(data):
     with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+# ★★★ ムード記録用のヘルパー関数を追加 ★★★
+def load_mood_data():
+    try:
+        with open(MOOD_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_mood_data(data):
+    with open(MOOD_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 conversation_history = {}
@@ -121,10 +134,58 @@ class AIChat(commands.Cog):
                     save_memory(memory)
         except Exception as e: print(f"An error occurred during user interaction processing: {e}")
 
+    # ★★★ ここからが新機能の心臓部！ ★★★
+    async def analyze_and_track_mood(self, message: discord.Message):
+        """メッセージの感情を分析し、チャンネルのムードを記録する"""
+        try:
+            analysis_prompt = f"""
+以下のユーザーの発言を分析し、発言の感情を「Positive」「Negative」「Neutral」のいずれかで判定し、-1.0から1.0の範囲で感情スコアを付けなさい。
+ユーザーの発言: 「{message.content}」
+
+出力形式は必ず以下の厳密なJSON形式とすること。
+{{
+  "emotion": "判定結果",
+  "score": スコア
+}}
+"""
+            response = await self.model.generate_content_async(analysis_prompt)
+            # レスポンスからJSON部分だけを抽出する
+            json_match = re.search(r'```json\n({.*?})\n```', response.text, re.DOTALL)
+            if not json_match:
+                # もし ```json ``` がなければ、波括弧で探す
+                json_match = re.search(r'({.*?})', response.text, re.DOTALL)
+
+            if json_match:
+                result_json = json_match.group(1)
+                analysis_result = json.loads(result_json)
+                score = analysis_result.get("score", 0.0)
+                
+                # 感情データを保存
+                channel_id = str(message.channel.id)
+                mood_data = load_mood_data()
+                if channel_id not in mood_data:
+                    mood_data[channel_id] = {"scores": [], "average": 0.0}
+                
+                # 最新10件のスコアだけを保持する
+                scores = mood_data[channel_id].get("scores", [])
+                scores.append(score)
+                mood_data[channel_id]["scores"] = scores[-10:]
+                
+                # 平均スコアを更新
+                avg_score = np.mean(mood_data[channel_id]["scores"])
+                mood_data[channel_id]["average"] = round(avg_score, 4)
+
+                save_mood_data(mood_data)
+        except Exception as e:
+            print(f"An error occurred during mood analysis: {e}")
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot or message.content.startswith(self.bot.command_prefix): return
         
+        # ★★★ 新機能：全てのメッセージを裏で感情分析にかける ★★★
+        asyncio.create_task(self.analyze_and_track_mood(message))
+
         if self.db_manager:
             asyncio.create_task(self.db_manager.add_message_to_db(message))
 
@@ -292,6 +353,16 @@ class AIChat(commands.Cog):
         memory = load_memory()
         user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
         
+        # ★★★ 新機能：現在のチャンネルのムードを取得 ★★★
+        channel_id = str(message.channel.id)
+        mood_data = load_mood_data().get(channel_id, {"average": 0.0})
+        mood_score = mood_data["average"]
+        mood_text = "ニュートラル"
+        if mood_score > 0.2:
+            mood_text = "ポジティブ"
+        elif mood_score < -0.2:
+            mood_text = "ネガティブ"
+
         # --- 新しい記憶システムからの情報取得 ---
         prompt_heading = "【最優先】このチャンネルでの関連性の高い過去の会話ログ"
         target_user_object = None
@@ -305,7 +376,7 @@ class AIChat(commands.Cog):
                 target_user_id = None
                 search_query = user_message 
         else:
-            target_user_id = None # 明示的にNoneに設定
+            target_user_id = None 
             search_query = user_message
 
         relevant_logs_text = "（特になし）"
@@ -346,6 +417,9 @@ class AIChat(commands.Cog):
 ---
 # 記憶情報（これらの情報を統合して、人間のように自然で文脈に合った応答を生成すること）
 
+## 【最優先】現在のチャンネルの雰囲気
+このチャンネルは現在、「{mood_text}」な雰囲気（ムードスコア: {mood_score:.2f}）です。この空気を読んで応答しなさい。
+
 ## {prompt_heading}
 {relevant_logs_text}
 
@@ -357,7 +431,7 @@ class AIChat(commands.Cog):
 - サーバー全体の共有知識(JSON): {server_notes_text}
 - サーバーの人間関係: {relationship_text}
 ---
-以上の全てを完璧に理解し、立案した「応答戦略」に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
+以上の全てを完璧に理解し、立案した「応答戦略」と**「チャンネルの雰囲気」**に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
 **【重要】** もしこれが特定のユーザーに関する質問（ログ見出しに名前が表示されている）なら、提示されたログからその人がどんな人物で、何に興味があるかを**要約して**答えなさい。
 **【最重要命令】全返答は500文字以内で簡潔にまとめること。**
 # あなたの返答:
