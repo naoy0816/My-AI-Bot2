@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (感情分析機能搭載版)
+# cogs/ai_chat.py (最終完全版 - 神の視点モード搭載)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -22,7 +22,7 @@ INTERVENTION_COOLDOWN = 300
 # ファイルパス設定
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
-MOOD_FILE = os.path.join(DATA_DIR, 'channel_mood.json') # ★★★ 新しい記憶ファイルを追加 ★★★
+MOOD_FILE = os.path.join(DATA_DIR, 'channel_mood.json')
 
 def load_memory():
     try:
@@ -37,7 +37,6 @@ def save_memory(data):
     with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-# ★★★ ムード記録用のヘルパー関数を追加 ★★★
 def load_mood_data():
     try:
         with open(MOOD_FILE, 'r', encoding='utf-8') as f:
@@ -56,13 +55,11 @@ recent_messages = {}
 class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # genai.configureはbot.pyのsetup_hookで実行
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         self.db_manager = None
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Bot起動時にDBマネージャーを取得する"""
         self.db_manager = self.bot.get_cog('DatabaseManager')
         if self.db_manager:
             print("Successfully linked with DatabaseManager.")
@@ -134,9 +131,7 @@ class AIChat(commands.Cog):
                     save_memory(memory)
         except Exception as e: print(f"An error occurred during user interaction processing: {e}")
 
-    # ★★★ ここからが新機能の心臓部！ ★★★
     async def analyze_and_track_mood(self, message: discord.Message):
-        """メッセージの感情を分析し、チャンネルのムードを記録する"""
         try:
             analysis_prompt = f"""
 以下のユーザーの発言を分析し、発言の感情を「Positive」「Negative」「Neutral」のいずれかで判定し、-1.0から1.0の範囲で感情スコアを付けなさい。
@@ -149,32 +144,17 @@ class AIChat(commands.Cog):
 }}
 """
             response = await self.model.generate_content_async(analysis_prompt)
-            # レスポンスからJSON部分だけを抽出する
-            json_match = re.search(r'```json\n({.*?})\n```', response.text, re.DOTALL)
-            if not json_match:
-                # もし ```json ``` がなければ、波括弧で探す
-                json_match = re.search(r'({.*?})', response.text, re.DOTALL)
-
+            json_match = re.search(r'```json\n({.*?})\n```', response.text, re.DOTALL) or re.search(r'({.*?})', response.text, re.DOTALL)
             if json_match:
-                result_json = json_match.group(1)
-                analysis_result = json.loads(result_json)
-                score = analysis_result.get("score", 0.0)
-                
-                # 感情データを保存
+                analysis_result = json.loads(json_match.group(1))
+                score = float(analysis_result.get("score", 0.0))
                 channel_id = str(message.channel.id)
                 mood_data = load_mood_data()
-                if channel_id not in mood_data:
-                    mood_data[channel_id] = {"scores": [], "average": 0.0}
-                
-                # 最新10件のスコアだけを保持する
+                if channel_id not in mood_data: mood_data[channel_id] = {"scores": [], "average": 0.0}
                 scores = mood_data[channel_id].get("scores", [])
                 scores.append(score)
                 mood_data[channel_id]["scores"] = scores[-10:]
-                
-                # 平均スコアを更新
-                avg_score = np.mean(mood_data[channel_id]["scores"])
-                mood_data[channel_id]["average"] = round(avg_score, 4)
-
+                mood_data[channel_id]["average"] = round(np.mean(mood_data[channel_id]["scores"]), 4)
                 save_mood_data(mood_data)
         except Exception as e:
             print(f"An error occurred during mood analysis: {e}")
@@ -183,9 +163,7 @@ class AIChat(commands.Cog):
     async def on_message(self, message):
         if message.author.bot or message.content.startswith(self.bot.command_prefix): return
         
-        # ★★★ 新機能：全てのメッセージを裏で感情分析にかける ★★★
         asyncio.create_task(self.analyze_and_track_mood(message))
-
         if self.db_manager:
             asyncio.create_task(self.db_manager.add_message_to_db(message))
 
@@ -225,50 +203,35 @@ class AIChat(commands.Cog):
         persona = utils.get_current_persona()
         if not persona: await message.channel.send("（ペルソナファイルが読み込めないんだけど…！）"); return
 
-        mime_type = attachment.content_type
-        if not (mime_type and (mime_type.startswith('image/') or mime_type.startswith('video/'))):
+        if not (attachment.content_type and (attachment.content_type.startswith('image/') or attachment.content_type.startswith('video/'))):
             await message.channel.send("はぁ？ アタシに見せたいなら、画像か動画にしなさいよね！")
             return
 
         async with message.channel.typing():
             try:
-                response = await self.bot.loop.run_in_executor(None, requests.get, attachment.url)
-                response.raise_for_status()
-                file_data = response.content
-                
-                media_blob = {"mime_type": mime_type, "data": file_data}
-
+                file_data = await attachment.read()
+                media_blob = {"mime_type": attachment.content_type, "data": file_data}
                 multimodal_prompt_template = persona["settings"].get("multimodal_prompt", "# 指示\nメディアを見て応答しなさい。")
                 char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
-
-                prompt_parts = [
-                    f"{char_settings}\n{multimodal_prompt_template}\n\n# ユーザーのテキスト\n「{user_message or '（…無言でコレをアタシに見せてきたわ）'}」\n\n# あなたの応答（500文字以内でペルソナに従ってまとめること！）:",
-                    media_blob
-                ]
+                prompt_parts = [f"{char_settings}\n{multimodal_prompt_template}\n\n# ユーザーのテキスト\n「{user_message or '（…無言でコレをアタシに見せてきたわ）'}」\n\n# あなたの応答:", media_blob]
                 
                 multimodal_model = genai.GenerativeModel('gemini-1.5-pro')
                 response = await multimodal_model.generate_content_async(prompt_parts)
                 await message.channel.send(response.text)
-
             except Exception as e:
                 await message.channel.send(f"（うぅ…アンタのファイルを見ようとしたら、アタシの目がぁぁ…！: {e}）")
 
     async def handle_text_mention(self, message):
         async with message.channel.typing():
             user_message = message.content.replace(f'<@!{self.bot.user.id}>', '').strip()
-            
             persona = utils.get_current_persona()
             if not persona: await message.channel.send("（ペルソナファイルが読み込めないんだけど…！）"); return
-
             meta_thinking_prompt = self.build_meta_thinking_prompt(message, user_message, persona)
-            
             try:
                 response = await self.model.generate_content_async(meta_thinking_prompt)
-                decision_text = response.text.strip()
+                decision_data = self.parse_decision_text(response.text.strip())
             except Exception as e:
                 await message.channel.send(f"（アタシの超思考回路にエラー発生よ…: {e}）"); return
-
-            decision_data = self.parse_decision_text(decision_text)
 
             if decision_data.get("ACTION") == 'SEARCH':
                 await self.execute_search_and_respond(message, user_message, decision_data.get("QUERY"), persona)
@@ -278,16 +241,11 @@ class AIChat(commands.Cog):
                 await self.generate_and_send_response(message, final_prompt, user_message, True)
 
     def build_meta_thinking_prompt(self, message, user_message, persona):
-        user_name = message.author.display_name
-        persona_name = persona.get("name", "AI")
-        persona_desc = persona.get("description", "応答します。")
-
         mentioned_users_text = "（なし）"
         if message.mentions:
             mentioned_users_text = "\n".join([f"- {user.display_name} (ID: {user.id})" for user in message.mentions if not user.bot and user.id != self.bot.user.id])
-
         return f"""
-あなたは、「{persona_name}」({persona_desc})の思考を司る「メタAI」です。
+あなたは、「{persona.get("name", "AI")}」({persona.get("description", "応答します。")})の思考を司る「メタAI」です。
 ユーザーのメッセージを分析し、次の行動を【1回の思考で】決定してください。
 # 思考プロセス
 1. **意図と感情の分析:** ユーザーのメッセージ（「{user_message}」）を読み解き、真の意図と感情を把握する。
@@ -298,7 +256,7 @@ class AIChat(commands.Cog):
     - `SEARCH` の場合: 最適な検索クエリを生成する。
     - `ANSWER` の場合: 応答に含めるべき重要な要点をリストアップする。
 # 分析対象
-- ユーザー名: {user_name}
+- ユーザー名: {message.author.display_name}
 - 会話履歴: {self.get_history_text(message.channel.id)}
 - ユーザーのメッセージ: 「{user_message}」
 - メッセージ内でメンションされたユーザー:
@@ -317,35 +275,24 @@ class AIChat(commands.Cog):
     def parse_decision_text(self, text):
         data = {}
         for line in text.splitlines():
-            if ':' in line:
-                key, value = line.split(':', 1)
-                data[key.strip().lstrip('[').rstrip(']')] = value.strip()
+            match = re.match(r'\[(.*?):(.*?)\]', line)
+            if match:
+                data[match.group(1)] = match.group(2).strip()
         return data
 
     def get_history_text(self, channel_id):
         return "\n".join(conversation_history.get(channel_id, [])) or "（まだこのチャンネルでの会話はないわ）"
 
     async def execute_search_and_respond(self, message, user_message, query, persona):
-        if not query:
-            await message.channel.send("（はぁ？検索したいけど、肝心のキーワードを思いつかなかったわ…アンタの質問がザコすぎなんじゃない？）"); return
-        await message.channel.send(f"（ふーん、「{user_message}」ね…。しょーがないから、「{query}」でググって、中身まで読んでやんよ♡）")
-        search_items = utils.google_search(query) 
+        if not query: await message.channel.send("（検索キーワードを思いつかなかったわ…）"); return
+        await message.channel.send(f"（「{query}」でググって、中身まで読んでやんよ♡）")
+        search_items = utils.google_search(query)
         if isinstance(search_items, str) or not search_items:
             await message.channel.send(search_items or "（検索したけど、何も見つからなかったわ。）"); return
         scraped_text = utils.scrape_url(search_items[0].get('link', ''))
         search_summary = "\n".join([f"- {item.get('title', '')}" for item in search_items])
-
         search_prompt_template = persona["settings"].get("search_prompt", "# 指示\n検索結果を元に応答しなさい。")
-        final_prompt = f"""
-{search_prompt_template}
-# 検索結果
-{search_summary}
-# Webページ本文
-{scraped_text}
-# ユーザーの質問
-{user_message}
-# あなたの回答（500文字以内でペルソナに従ってまとめること！）
-"""
+        final_prompt = f"{search_prompt_template}\n# 検索結果\n{search_summary}\n# Webページ本文\n{scraped_text}\n# ユーザーの質問\n{user_message}\n# あなたの回答:"
         await self.generate_and_send_response(message, final_prompt, user_message, False)
 
     async def build_final_prompt(self, message, user_message, decision_data, persona, target_user_id: str = None):
@@ -353,90 +300,67 @@ class AIChat(commands.Cog):
         memory = load_memory()
         user_name = memory.get('users', {}).get(user_id, {}).get('fixed_nickname', message.author.display_name)
         
-        # ★★★ 新機能：現在のチャンネルのムードを取得 ★★★
         channel_id = str(message.channel.id)
         mood_data = load_mood_data().get(channel_id, {"average": 0.0})
         mood_score = mood_data["average"]
         mood_text = "ニュートラル"
-        if mood_score > 0.2:
-            mood_text = "ポジティブ"
-        elif mood_score < -0.2:
-            mood_text = "ネガティブ"
+        if mood_score > 0.2: mood_text = "ポジティブ"
+        elif mood_score < -0.2: mood_text = "ネガティブ"
 
-        # --- 新しい記憶システムからの情報取得 ---
-        prompt_heading = "【最優先】このチャンネルでの関連性の高い過去の会話ログ"
-        target_user_object = None
-
-        if target_user_id and target_user_id != 'None':
+        prompt_heading = "【チャンネル内記憶】このチャンネルでの関連性の高い過去の会話ログ"
+        if target_user_id and target_user_id.lower() != 'none':
             try:
                 target_user_object = await self.bot.fetch_user(int(target_user_id))
-                prompt_heading = f"【最優先】ユーザー「{target_user_object.display_name}」に関する過去の発言ログ"
+                prompt_heading = f"【チャンネル内記憶】ユーザー「{target_user_object.display_name}」に関する過去の発言ログ"
                 search_query = target_user_object.display_name
             except (discord.NotFound, ValueError):
-                target_user_id = None
-                search_query = user_message 
+                target_user_id, search_query = None, user_message
         else:
-            target_user_id = None 
-            search_query = user_message
+            target_user_id, search_query = None, user_message
 
-        relevant_logs_text = "（特になし）"
+        relevant_logs_text, cross_channel_logs_text = "（特になし）", "（特になし）"
         if self.db_manager:
             relevant_logs_text = await self.db_manager.search_similar_messages(search_query, str(message.channel.id), author_id=target_user_id)
-        # ------------------------------------
-
-        # --- 古い記憶システムからの情報取得 ---
+            if not target_user_id:
+                cross_channel_logs_text = await self.db_manager.search_across_all_channels(search_query, message.guild)
+        
         query_embedding = await utils.get_embedding(user_message)
         user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
         server_notes_all = memory.get('server', {}).get('notes', [])
-        relevant_user_notes = [note['text'] for note in self._find_similar_notes(query_embedding, user_notes_all)]
-        relevant_server_notes = [note['text'] for note in self._find_similar_notes(query_embedding, server_notes_all)]
-        user_notes_text = "\n".join([f"- {note}" for note in relevant_user_notes]) or "（特になし）"
-        server_notes_text = "\n".join([f"- {note}" for note in relevant_server_notes]) or "（特になし）"
+        user_notes_text = "\n".join([f"- {n['text']}" for n in self._find_similar_notes(query_embedding, user_notes_all)]) or "（特になし）"
+        server_notes_text = "\n".join([f"- {n['text']}" for n in self._find_similar_notes(query_embedding, server_notes_all)]) or "（特になし）"
         
         relationship_text = "（特になし）"
         if user_id in memory.get('relationships', {}):
-            relations = []
-            for partner_id, data in memory['relationships'][user_id].items():
-                try:
-                    partner = await self.bot.fetch_user(int(partner_id))
-                    top_topic = max(data['topics'], key=data['topics'].get) if data['topics'] else "色々な話"
-                    relations.append(f"- {partner.display_name}とは「{top_topic}」についてよく話している")
-                except discord.NotFound: continue
+            relations = [f"- { (await self.bot.fetch_user(int(p_id))).display_name }とは「{max(d['topics'], key=d['topics'].get) if d['topics'] else '色々な話'}」についてよく話している" for p_id, d in memory['relationships'][user_id].items()]
             if relations: relationship_text = "\n".join(relations)
 
         char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
-
-        final_prompt = f"""
-{char_settings}
+        return f"""{char_settings}
 ---
 # ★★★ アタシの思考と応答戦略 ★★★
-[EMOTION:{decision_data.get("EMOTION", "不明")}]
-[INTENT:{decision_data.get("INTENT", "不明")}]
-[STRATEGY:{decision_data.get("STRATEGY", "不明")}]
-[POINTS:{decision_data.get("POINTS", "特になし")}]
+[EMOTION:{decision_data.get("EMOTION", "不明")}] [INTENT:{decision_data.get("INTENT", "不明")}] [STRATEGY:{decision_data.get("STRATEGY", "不明")}] [POINTS:{decision_data.get("POINTS", "特になし")}]
 ---
 # 記憶情報（これらの情報を統合して、人間のように自然で文脈に合った応答を生成すること）
-
 ## 【最優先】現在のチャンネルの雰囲気
 このチャンネルは現在、「{mood_text}」な雰囲気（ムードスコア: {mood_score:.2f}）です。この空気を読んで応答しなさい。
-
 ## {prompt_heading}
 {relevant_logs_text}
-
+## ★★★【サーバー横断記憶】サーバー全体の関連性の高い過去の会話ログ★★★
+これは、他のチャンネルで行われた、今の会話に関連する可能性のある記憶です。もし関連があれば、自然な形で会話に組み込みなさい。（例：「そういえば、その話、昨日 #別のチャンネル で〇〇さんが言ってたわね…」）
+{cross_channel_logs_text}
 ## 【参考】直前の会話
 {self.get_history_text(message.channel.id)}
-
 ## 【参考】その他の知識
 - ユーザー({user_name})に関する手動記憶(JSON): {user_notes_text}
 - サーバー全体の共有知識(JSON): {server_notes_text}
 - サーバーの人間関係: {relationship_text}
 ---
-以上の全てを完璧に理解し、立案した「応答戦略」と**「チャンネルの雰囲気」**に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
-**【重要】** もしこれが特定のユーザーに関する質問（ログ見出しに名前が表示されている）なら、提示されたログからその人がどんな人物で、何に興味があるかを**要約して**答えなさい。
+以上の全てを完璧に理解し、立案した「応答戦略」と「チャンネルの雰囲気」、「サーバー全体の記憶」に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
+**【重要】** もしこれが特定のユーザーに関する質問なら、提示されたログからその人がどんな人物で、何に興味があるかを**要約して**答えなさい。
 **【最重要命令】全返答は500文字以内で簡潔にまとめること。**
 # あなたの返答:
 """
-        return final_prompt
 
     async def generate_and_send_response(self, message, final_prompt, user_message, should_consolidate_memory):
         try:
@@ -445,11 +369,9 @@ class AIChat(commands.Cog):
             await message.channel.send(bot_response_text)
 
             channel_id = message.channel.id
-            if channel_id not in conversation_history: conversation_history[channel_id] = []
+            if channel_id not in conversation_history: conversation_history[channel_id] = deque(maxlen=10)
             conversation_history[channel_id].append(f"ユーザー「{message.author.display_name}」: {user_message}")
             conversation_history[channel_id].append(f"アタシ: {bot_response_text}")
-            if len(conversation_history[channel_id]) > 10:
-                conversation_history[channel_id] = conversation_history[channel_id][-10:]
             
             if should_consolidate_memory:
                 asyncio.create_task(self.process_memory_consolidation(message, user_message, bot_response_text))
@@ -459,17 +381,12 @@ class AIChat(commands.Cog):
     async def handle_proactive_intervention(self, message, relevant_fact):
         persona = utils.get_current_persona()
         if not persona: return
-
         async with message.channel.typing():
             try:
-                channel_id = message.channel.id
-                context = "\n".join([f"{msg['author_name']}: {msg['content']}" for msg in recent_messages.get(channel_id, [])])
-                
+                context = "\n".join([f"{msg['author_name']}: {msg['content']}" for msg in recent_messages.get(message.channel.id, [])])
                 char_settings = persona["settings"].get("char_settings", "").format(user_name="みんな")
                 intervention_prompt_template = persona["settings"].get("intervention_prompt", "会話に自然に割り込みなさい。")
-
-                final_intervention_prompt = f"""
-{char_settings}
+                final_intervention_prompt = f"""{char_settings}
 # 状況
 今、チャンネルでは以下の会話が進行中です。この会話の流れと、あなたが持っている知識を結びつけて、自然で面白い介入をしなさい。
 ## 直近の会話の流れ
@@ -478,19 +395,13 @@ class AIChat(commands.Cog):
 「{relevant_fact}」
 # 指示
 {intervention_prompt_template}
-# あなたの割り込み発言（500文字以内でペルソナに従ってまとめること！）:
+# あなたの割り込み発言:
 """
-                
                 response = await self.model.generate_content_async(final_intervention_prompt)
                 intervention_text = response.text.strip()
-                
-                if len(intervention_text) < 5:
-                    print(f"[Proactive Intervention] Generated text is too short. Ignored.")
-                    return
-
-                await message.channel.send(intervention_text)
-                last_intervention_time[message.channel.id] = time.time()
-                
+                if len(intervention_text) > 5:
+                    await message.channel.send(intervention_text)
+                    last_intervention_time[message.channel.id] = time.time()
             except Exception as e: 
                 print(f"Error during proactive intervention: {e}")
 
