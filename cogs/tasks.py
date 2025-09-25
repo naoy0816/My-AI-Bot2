@@ -6,10 +6,10 @@ import requests
 import datetime
 import json
 import google.generativeai as genai
-from . import _utils as utils # ★★★ _utils.pyをインポートするように修正 ★★★
+import asyncio  # ★★★ この一行を追加 ★★★
+from . import _utils as utils
 
-# (ここから下のコードは、前回の最適化で提案したものと同じです)
-# (ただし、インポート部分だけ上記のように修正されています)
+# (ここから下のコードに変更はありません)
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 
