@@ -1,4 +1,4 @@
-# cogs/database_manager.py (最終完成版)
+# cogs/database_manager.py (最終調整版)
 import discord
 from discord.ext import commands
 import chromadb
@@ -10,8 +10,8 @@ import traceback
 # -------------------- 設定項目 --------------------
 DB_PATH = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.') + "/chroma_db"
 COLLECTION_NAME_PREFIX = "channel_history_"
-# ★★★ 検索結果の足切りスコア。この数字より距離が遠いものは無視する (小さいほど厳しい) ★★★
-DISTANCE_THRESHOLD = 1.0
+# ★★★ 検索エンジンの"視力"を調整！ この数値を下げて、より厳密な検索をするようにしたわ ★★★
+DISTANCE_THRESHOLD = 0.8
 # ----------------------------------------------------
 
 class DatabaseManager(commands.Cog):
@@ -79,7 +79,7 @@ class DatabaseManager(commands.Cog):
             print(f"Error adding message {message.id} to DB collection for channel {message.channel.id}: {e}")
             return False
 
-    # ★★★ ここが「神の記憶」を呼び覚ます検索機能の【最終完成版】よ！ ★★★
+    # ★★★ ここが「神の記憶」を呼び覚ます検索機能の【最終調整版】よ！ ★★★
     async def search_similar_messages(self, query_text: str, channel_id: str, author_id: str = None, top_k: int = 5):
         """【チャンネルとユーザーを指定して】関連する過去の会話をベクトル検索する"""
         collection = self.get_channel_collection(channel_id)
@@ -101,9 +101,9 @@ class DatabaseManager(commands.Cog):
 
             results = collection.query(
                 query_embeddings=[query_embedding],
-                n_results=min(top_k * 2, collection_count), # 足切りされる可能性があるので、少し多めに取得
+                n_results=min(top_k * 2, collection_count),
                 where=where_filter if where_filter else None,
-                include=["metadatas", "documents", "distances"] # ★★★ 距離スコアも取得 ★★★
+                include=["metadatas", "documents", "distances"] 
             )
             
             if not results or not results.get('documents') or not results['documents'][0]:
@@ -114,7 +114,6 @@ class DatabaseManager(commands.Cog):
             for i, doc in enumerate(results['documents'][0]):
                 distance = results['distances'][0][i]
                 
-                # ★★★ ここで足切り！ ★★★
                 if distance > DISTANCE_THRESHOLD:
                     print(f"  -> REJECTED (distance: {distance:.4f} > {DISTANCE_THRESHOLD}): 「{doc[:30]}...」")
                     continue
@@ -127,7 +126,6 @@ class DatabaseManager(commands.Cog):
                 log_entry = f"- {timestamp}, {author}「{doc}」"
                 found_logs.append(log_entry)
                 
-                # 上位5件が見つかったら終了
                 if len(found_logs) >= top_k:
                     break
             
