@@ -1,4 +1,4 @@
-# cogs/ai_chat.py (最終完全版 - 神の視点モード搭載)
+# cogs/ai_chat.py (診断用 - DB機能無効化)
 import discord
 from discord.ext import commands
 import google.generativeai as genai
@@ -56,15 +56,17 @@ class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.model = genai.GenerativeModel('gemini-1.5-flash')
+        # ★★★ DBマネージャーへのリンクを無効化 ★★★
         self.db_manager = None
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        self.db_manager = self.bot.get_cog('DatabaseManager')
-        if self.db_manager:
-            print("Successfully linked with DatabaseManager.")
-        else:
-            print("Warning: DatabaseManager cog not found.")
+    # ★★★ on_readyでのリンク処理をコメントアウト ★★★
+    # @commands.Cog.listener()
+    # async def on_ready(self):
+    #     self.db_manager = self.bot.get_cog('DatabaseManager')
+    #     if self.db_manager:
+    #         print("Successfully linked with DatabaseManager.")
+    #     else:
+    #         print("Warning: DatabaseManager cog not found.")
 
     async def handle_keywords(self, message):
         content = message.content
@@ -164,8 +166,10 @@ class AIChat(commands.Cog):
         if message.author.bot or message.content.startswith(self.bot.command_prefix): return
         
         asyncio.create_task(self.analyze_and_track_mood(message))
-        if self.db_manager:
-            asyncio.create_task(self.db_manager.add_message_to_db(message))
+        
+        # ★★★ DBへのメッセージ追加処理をコメントアウト ★★★
+        # if self.db_manager:
+        #     asyncio.create_task(self.db_manager.add_message_to_db(message))
 
         channel_id = message.channel.id
         if channel_id not in recent_messages: recent_messages[channel_id] = deque(maxlen=6)
@@ -318,11 +322,13 @@ class AIChat(commands.Cog):
         else:
             target_user_id, search_query = None, user_message
 
-        relevant_logs_text, cross_channel_logs_text = "（特になし）", "（特になし）"
-        if self.db_manager:
-            relevant_logs_text = await self.db_manager.search_similar_messages(search_query, str(message.channel.id), author_id=target_user_id)
-            if not target_user_id:
-                cross_channel_logs_text = await self.db_manager.search_across_all_channels(search_query, message.guild)
+        relevant_logs_text, cross_channel_logs_text = "（長期記憶は現在オフラインです）", "（長期記憶は現在オフラインです）"
+        
+        # ★★★ DBからのログ検索処理を完全に無効化 ★★★
+        # if self.db_manager:
+        #     relevant_logs_text = await self.db_manager.search_similar_messages(search_query, str(message.channel.id), author_id=target_user_id)
+        #     if not target_user_id:
+        #         cross_channel_logs_text = await self.db_manager.search_across_all_channels(search_query, message.guild)
         
         query_embedding = await utils.get_embedding(user_message)
         user_notes_all = memory.get('users', {}).get(user_id, {}).get('notes', [])
@@ -347,7 +353,6 @@ class AIChat(commands.Cog):
 ## {prompt_heading}
 {relevant_logs_text}
 ## ★★★【サーバー横断記憶】サーバー全体の関連性の高い過去の会話ログ★★★
-これは、他のチャンネルで行われた、今の会話に関連する可能性のある記憶です。もし関連があれば、自然な形で会話に組み込みなさい。（例：「そういえば、その話、昨日 #別のチャンネル で〇〇さんが言ってたわね…」）
 {cross_channel_logs_text}
 ## 【参考】直前の会話
 {self.get_history_text(message.channel.id)}
