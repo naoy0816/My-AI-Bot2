@@ -1,16 +1,16 @@
-# bot.py (最終修正版)
+# bot.py (スラッシュコマンド同期機能付き)
 import discord
 from discord.ext import commands
 import os
 import asyncio
-import google.generativeai as genai # ★★★ 追加 ★★★
+import google.generativeai as genai
 
 # Botの基本的な設定
 intents = discord.Intents.default()
 intents.message_content = True
+# '!'プレフィックスはもう使わないが、下位互換性のために残しても良い
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# ★★★ ここで最初に一回だけ、AIに挨拶するのよ！ ★★★
 @bot.event
 async def setup_hook():
     # GoogleのAIモデルを設定
@@ -26,6 +26,19 @@ async def setup_hook():
             except Exception as e:
                 print(f'❌ Failed to load {filename}: {e}')
     print('------------------------------------------------------')
+    
+    # ★★★ ここが重要！ 作成したスラッシュコマンドをDiscordサーバーに登録するわ ★★★
+    try:
+        # 即時反映させたい場合は、ギルドIDを指定する
+        # guild = discord.Object(id=...) # あなたのサーバーIDをここに入れる
+        # bot.tree.copy_global_to(guild=guild)
+        # synced = await bot.tree.sync(guild=guild)
+        
+        # 全サーバーに反映（反映に最大1時間かかる場合がある）
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash command(s).")
+    except Exception as e:
+        print(f"Failed to sync slash commands: {e}")
 
 
 @bot.event
@@ -38,6 +51,7 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot:
         return
+    # '!'プレフィックスのコマンドも処理できるように残しておく
     await bot.process_commands(message)
 
 # Botを起動
