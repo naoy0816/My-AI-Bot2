@@ -1,4 +1,4 @@
-# bot.py (最終修正版)
+# bot.py (本当の最終FIX版)
 import discord
 from discord.ext import commands
 import os
@@ -14,6 +14,8 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 @bot.event
 async def setup_hook():
     """Bot起動時にCogsを読み込み、スラッシュコマンドを同期する"""
+    print("--- 起動プロセス開始 ---")
+    
     # Google AIモデルの設定
     # ★★★ APIキーの環境変数名を修正 (key -> KEY) ★★★
     api_key = os.getenv('GOOGLE_API_KEY')
@@ -24,12 +26,12 @@ async def setup_hook():
         print("✅ Google Generative AI configured.")
     
     # cogsフォルダ内の全Cogを読み込む
-    print('------------------------------------------------------')
+    print('--- Cog読み込み開始 ---')
     for filename in os.listdir('./cogs'):
         if filename.endswith('.py') and not filename.startswith('_'):
-            # データベースマネージャーは起動失敗の原因のため、一時的に無効化
+            # データベースマネージャーは起動失敗の原因のため、読み込まない
             if filename == 'database_manager.py':
-                print(f'⚠️  {filename} は既知の問題により、一時的に読み込みをスキップします。')
+                print(f'⚠️  {filename} は無効化されています。')
                 continue
             
             try:
@@ -37,10 +39,11 @@ async def setup_hook():
                 print(f'✅ Successfully loaded: {filename}')
             except Exception as e:
                 print(f'❌ Failed to load {filename}: {e.__class__.__name__}: {e}')
-    print('------------------------------------------------------')
+    print('--- Cog読み込み完了 ---')
     
     # スラッシュコマンドをDiscordサーバーに登録
     try:
+        print("--- スラッシュコマンド同期開始 ---")
         synced = await bot.tree.sync()
         if synced:
             print(f"✅ Synced {len(synced)} slash command(s).")
