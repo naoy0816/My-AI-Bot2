@@ -1,4 +1,4 @@
-# cogs/commands.py (最終版・完全コード)
+# cogs/commands.py (ムード確認コマンド搭載版)
 import discord
 from discord.ext import commands
 import json
@@ -10,7 +10,8 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from . import _utils as utils
 from . import _persona_manager as persona_manager
-import traceback # エラー詳細表示のために追加
+import traceback
+from .ai_chat import load_mood_data # ★★★ 新機能のためにインポートを追加 ★★★
 
 # -------------------- ファイルパス設定 --------------------
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
@@ -113,7 +114,7 @@ class UserCommands(commands.Cog):
         embed.add_field(name="🌐 サーバー共通", value="`!server_remember [内容]` - サーバーの皆で共有したいことを記憶\n`!server_recall` - サーバーの共有知識を表示", inline=False)
         embed.add_field(name="👤 ペルソナ管理", value="`!list_personas` - ペルソナ一覧\n`!current_persona` - 現在のペルソナ確認\n`!set_persona [ID]` - ペルソナ切替 (オーナー限定)", inline=False)
         embed.add_field(name="🛠️ ツール", value="`!search [キーワード]` (`!g`) - アンタの代わりにググってあげる\n`!todo add [内容]` - やることを追加\n`!todo list` - やることリストを表示\n`!todo done [番号]` - 完了したことを消す\n`!roast` - (画像を添付して) アタシに画像をイジらせる", inline=False)
-        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!test_recall [キーワード]` - DB記憶検索(オーナー限定)\n`!reset_database confirm` - **DB全記憶リセット**(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)\n`!db_status` - DBの状況を確認(オーナー限定)", inline=False)
+        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!test_recall [キーワード]` - DB記憶検索(オーナー限定)\n`!reset_database confirm` - **DB全記憶リセット**(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)\n`!db_status` - DBの状況を確認(オーナー限定)\n`!mood` - チャンネルのムードを確認(オーナー限定)", inline=False)
         embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
         await ctx.send(embed=embed)
 
@@ -138,7 +139,6 @@ class UserCommands(commands.Cog):
 
         async with ctx.typing():
             try:
-                # Use a different model for this specific, more creative task
                 roast_model = genai.GenerativeModel('gemini-1.5-pro')
                 response = requests.get(attachment.url)
                 response.raise_for_status()
@@ -394,7 +394,6 @@ class UserCommands(commands.Cog):
                 async for message in channel.history(limit=limit_per_channel):
                     processed_in_channel += 1
                     
-                    # ★★★ ここから詳細なデバッグログ出力 ★★★
                     if message.author.bot:
                         print(f"[BACKFILL] スキップ(BOT): {message.author.name}「{message.content[:30]}...」")
                         continue
@@ -430,7 +429,6 @@ class UserCommands(commands.Cog):
                     )
                     print(f"[BACKFILL] 登録成功: {message.author.name}「{message.content[:30]}...」")
                     added_in_channel += 1
-                    # ★★★ デバッグログここまで ★★★
 
                 total_processed += processed_in_channel
                 total_added += added_in_channel
@@ -554,6 +552,44 @@ class UserCommands(commands.Cog):
 
             except Exception as e:
                 await ctx.send(f"（ごめん、データベースの状況を確認しようとしたらエラーが出たわ…: {e}）")
+    
+    # ★★★ ムード確認コマンドを追加 ★★★
+    @commands.command(name='mood')
+    @commands.is_owner()
+    async def mood_command(self, ctx, channel: discord.TextChannel = None):
+        """
+        指定されたチャンネル（または現在のチャンネル）のムード状況を表示するわ（オーナー限定）。
+        """
+        if channel is None:
+            channel = ctx.channel
+
+        mood_data_all = load_mood_data()
+        channel_mood = mood_data_all.get(str(channel.id))
+
+        if not channel_mood:
+            await ctx.send(f"#{channel.name} のムードデータはまだ記録されてないみたいね。")
+            return
+
+        avg_score = channel_mood.get("average", 0.0)
+        mood_text = "😐 ニュートラル"
+        color = discord.Color.default()
+        if avg_score > 0.2:
+            mood_text = "😊 ポジティブ"
+            color = discord.Color.green()
+        elif avg_score < -0.2:
+            mood_text = "😠 ネガティブ"
+            color = discord.Color.red()
+        
+        embed = discord.Embed(
+            title=f"🧠 #{channel.name} のムード分析 🧠",
+            description=f"現在の雰囲気: **{mood_text}**",
+            color=color
+        )
+        embed.add_field(name="平均ムードスコア", value=f"`{avg_score:.4f}`", inline=True)
+        embed.add_field(name="記録されたスコア件数", value=f"`{len(channel_mood.get('scores', []))}`件 / 直近10件", inline=True)
+        embed.set_footer(text="スコアは -1.0 (ネガティブ) から 1.0 (ポジティブ) の範囲よ。")
+
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
