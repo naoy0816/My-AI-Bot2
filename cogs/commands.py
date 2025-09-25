@@ -191,7 +191,7 @@ class UserCommands(commands.Cog):
 {search_results_text}
 # ユーザーの質問
 {query}
-# あなたの回答（500文字以内でペルソナに従ってまとめること！）
+# あなたの回答（200文字以内でペルソナに従ってまとめること！）
 """
         try:
             response = await self.model.generate_content_async(synthesis_prompt)
