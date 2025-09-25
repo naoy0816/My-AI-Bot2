@@ -1,4 +1,4 @@
-# cogs/commands.py (完全版)
+# cogs/commands.py (完全版・DB診断機能付き)
 import discord
 from discord.ext import commands
 import json
@@ -112,7 +112,7 @@ class UserCommands(commands.Cog):
         embed.add_field(name="🌐 サーバー共通", value="`!server_remember [内容]` - サーバーの皆で共有したいことを記憶\n`!server_recall` - サーバーの共有知識を表示", inline=False)
         embed.add_field(name="👤 ペルソナ管理", value="`!list_personas` - ペルソナ一覧\n`!current_persona` - 現在のペルソナ確認\n`!set_persona [ID]` - ペルソナ切替 (オーナー限定)", inline=False)
         embed.add_field(name="🛠️ ツール", value="`!search [キーワード]` (`!g`) - アンタの代わりにググってあげる\n`!todo add [内容]` - やることを追加\n`!todo list` - やることリストを表示\n`!todo done [番号]` - 完了したことを消す\n`!roast` - (画像を添付して) アタシに画像をイジらせる", inline=False)
-        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!test_recall [キーワード]` - DB記憶検索(オーナー限定)\n`!reset_database confirm` - **DB全記憶リセット**(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)", inline=False)
+        embed.add_field(name="⚙️ デバッグ & DB", value="`!ping` - 反応速度\n`!debug_memory` - 長期記憶(JSON)確認\n`!backfill_logs [件数]` - 過去ログ学習(オーナー限定)\n`!test_recall [キーワード]` - DB記憶検索(オーナー限定)\n`!reset_database confirm` - **DB全記憶リセット**(オーナー限定)\n`!reload_cogs` - 全機能再読込(オーナー限定)\n`!db_status` - DBの状況を確認(オーナー限定)", inline=False)
         embed.set_footer(text="アタシへの会話は @メンション を付けて話しかけなさいよね！")
         await ctx.send(embed=embed)
 
@@ -472,6 +472,57 @@ class UserCommands(commands.Cog):
 
         except Exception as e:
             await ctx.send(f"（ごめん、データベースのリセット中にエラーが発生したわ: {e}）")
+
+    # ★★★ DB診断コマンドを追加 ★★★
+    @commands.command(name='db_status')
+    @commands.is_owner()
+    async def db_status(self, ctx):
+        """
+        現在のデータベースの状態（コレクション数、各コレクションのアイテム数）を表示するわ（オーナー限定）。
+        """
+        db_manager = self.bot.get_cog('DatabaseManager')
+        if not db_manager or not db_manager.chroma_client:
+            await ctx.send("（ごめん、データベースマネージャーが準備できてないみたい…）")
+            return
+
+        async with ctx.typing():
+            try:
+                collections = db_manager.chroma_client.list_collections()
+                if not collections:
+                    await ctx.send("アタシの脳みそ（データベース）には、まだ何の記憶（コレクション）も作られてないみたい…。 `!backfill_logs` を実行したことある？")
+                    return
+
+                embed = discord.Embed(
+                    title="🧠 アタシの記憶データベース状況 🧠",
+                    description=f"現在、{len(collections)}個の書庫（チャンネルの記憶）が存在するわ。",
+                    color=discord.Color.blue()
+                )
+
+                status_reports = []
+                total_items = 0
+                for collection in collections:
+                    try:
+                        channel_id_str = collection.name.replace("channel_history_", "")
+                        channel = self.bot.get_channel(int(channel_id_str))
+                        channel_name = f"#{channel.name}" if channel else f"ID: {channel_id_str} (不明)"
+                        
+                        count = collection.count()
+                        total_items += count
+                        status_reports.append(f"**{channel_name}**: {count}件の記憶")
+                    except Exception as e:
+                        status_reports.append(f"エラー: {collection.name} ({e})")
+                
+                embed.add_field(
+                    name="各書庫の記憶件数",
+                    value="\n".join(status_reports) if status_reports else "（詳細なし）",
+                    inline=False
+                )
+                embed.set_footer(text=f"合計記憶件数: {total_items}件")
+
+                await ctx.send(embed=embed)
+
+            except Exception as e:
+                await ctx.send(f"（ごめん、データベースの状況を確認しようとしたらエラーが出たわ…: {e}）")
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
