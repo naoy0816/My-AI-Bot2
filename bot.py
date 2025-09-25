@@ -6,9 +6,11 @@ import asyncio
 import google.generativeai as genai
 
 # Botの基本的な設定
+# ▼▼▼ ここを修正 ▼▼▼
 intents = discord.Intents.default()
-intents.message_content = True
-# '!'プレフィックスはもう使わないが、下位互換性のために残しても良い
+intents.messages = True
+intents.message_content = True # on_messageで内容を読むために必要
+# ▲▲▲ ここまで修正 ▲▲▲
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 @bot.event
@@ -46,13 +48,6 @@ async def on_ready():
     print(f'Logged in as: {bot.user.name}')
     print('Bot is now online and ready!')
 
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    # '!'プレフィックスのコマンドも処理できるように残しておく
-    await bot.process_commands(message)
 
 # Botを起動
 async def main():
