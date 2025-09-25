@@ -1,5 +1,4 @@
-# requirements.txt
-
+# requirements.txt (最終FIX版)
 aiohappyeyeballs==2.6.1
 aiohttp==3.12.15
 aiosignal==1.4.0
@@ -17,7 +16,7 @@ google-api-python-client==2.182.0
 google-auth==2.40.3
 google-auth-httplib2==0.2.0
 google-generativeai==0.8.5
-googleapis-common-protos==1.70.0
+googleapis-common- protos==1.70.0
 grpcio==1.75.0
 grpcio-status==1.71.2
 httplib2==0.31.0
@@ -43,5 +42,5 @@ numpy==1.26.4
 beautifulsoup4==4.12.3
 lxml==5.2.2
 Pillow==10.4.0
-# ★★★ ここのバージョンを安定版に変更 ★★★
+# ★★★ 起動失敗の原因となっていたバージョンを、安定版に固定 ★★★
 chromadb==0.4.24
