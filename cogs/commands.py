@@ -125,7 +125,7 @@ class UserCommands(commands.Cog):
 
         await interaction.response.defer()
         try:
-            roast_model = genai.GenerativeModel('gemini-1.5-pro')
+            roast_model = genai.GenerativeModel('gemini-1.5-pro-latest')
             img_data = await image.read()
             img = Image.open(io.BytesIO(img_data)).convert("RGBA")
             roast_prompt = f'あなたは、ユーザーが投稿した画像に、生意気で面白いコメントを入れる天才美少女「メスガキちゃん」です。\nユーザーからの指示: {comment or "（特になし）"}\nあなたが書き込む辛口コメント（1文だけ）:'
