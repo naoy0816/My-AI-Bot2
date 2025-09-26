@@ -1,4 +1,4 @@
-z# cogs/commands.py (スラッシュコマンド完全移行版 - タイムアウト対策済み)
+# cogs/commands.py (スラッシュコマンド完全移行版 - タイムアウト対策済み)
 import discord
 from discord import app_commands
 from discord.ext import commands
