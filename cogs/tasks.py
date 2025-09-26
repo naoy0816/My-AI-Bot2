@@ -22,7 +22,7 @@ class DailyTasks(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-flash-latest') # ★★★ モデル名を修正 ★★★
+        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
         self.daily_report.start()
 
     def cog_unload(self):
