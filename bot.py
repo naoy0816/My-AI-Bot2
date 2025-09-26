@@ -1,4 +1,4 @@
-# bot.py (本当の最終FIX版)
+# bot.py (スラッシュコマンド同期機能付き)
 import discord
 from discord.ext import commands
 import os
@@ -7,65 +7,53 @@ import google.generativeai as genai
 
 # Botの基本的な設定
 intents = discord.Intents.default()
-intents.message_content = True # メッセージ内容の読み取りに必要
-
+intents.message_content = True
+# '!'プレフィックスは下位互換性のために残しても良い
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 @bot.event
 async def setup_hook():
-    """Bot起動時にCogsを読み込み、スラッシュコマンドを同期する"""
-    print("--- 起動プロセス開始 ---")
-    
-    # Google AIモデルの設定
-    # ★★★ APIキーの環境変数名を修正 (key -> KEY) ★★★
-    api_key = os.getenv('GOOGLE_API_KEY')
-    if not api_key:
-        print("【致命的エラー】: 環境変数 'GOOGLE_API_KEY' が設定されていません。")
-    else:
-        genai.configure(api_key=api_key)
-        print("✅ Google Generative AI configured.")
-    
+    # GoogleのAIモデルを設定
+    genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+    print("Google Generative AI configured.")
     # cogsフォルダ内の全Cogを読み込む
-    print('--- Cog読み込み開始 ---')
+    print('------------------------------------------------------')
     for filename in os.listdir('./cogs'):
         if filename.endswith('.py') and not filename.startswith('_'):
-            # データベースマネージャーは起動失敗の原因のため、読み込まない
-            if filename == 'database_manager.py':
-                print(f'⚠️  {filename} は無効化されています。')
-                continue
-            
             try:
                 await bot.load_extension(f'cogs.{filename[:-3]}')
                 print(f'✅ Successfully loaded: {filename}')
             except Exception as e:
-                print(f'❌ Failed to load {filename}: {e.__class__.__name__}: {e}')
-    print('--- Cog読み込み完了 ---')
+                print(f'❌ Failed to load {filename}: {e}')
+    print('------------------------------------------------------')
     
-    # スラッシュコマンドをDiscordサーバーに登録
+    # ★★★ 作成したスラッシュコマンドをDiscordサーバーに登録するわ ★★★
     try:
-        print("--- スラッシュコマンド同期開始 ---")
+        # 全サーバーに反映（反映に最大1時間かかる場合がある）
         synced = await bot.tree.sync()
-        if synced:
-            print(f"✅ Synced {len(synced)} slash command(s).")
-        else:
-            print("ℹ️  No new slash commands to sync.")
-            
+        print(f"Synced {len(synced)} slash command(s).")
     except Exception as e:
-        print(f"❌ Failed to sync slash commands: {e}")
+        print(f"Failed to sync slash commands: {e}")
+
 
 @bot.event
 async def on_ready():
-    """Botのログインが完了したときに呼び出される"""
-    print('------------------------------------------------------')
-    print(f'✅ Logged in as: {bot.user.name} (ID: {bot.user.id})')
-    print('✅ Bot is now online and ready!')
-    print('------------------------------------------------------')
+    print(f'Logged in as: {bot.user.name}')
+    print('Bot is now online and ready!')
 
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    # '!'プレフィックスのコマンドも処理できるように残しておく
+    await bot.process_commands(message)
+
+# Botを起動
 async def main():
-    """Botを起動するメイン処理"""
     token = os.getenv('DISCORD_BOT_TOKEN')
     if token is None:
-        print("【致命的エラー】: 環境変数 'DISCORD_BOT_TOKEN' が設定されていません。")
+        print("Error: DISCORD_BOT_TOKEN is not set in environment variables.")
         return
     
     async with bot:
