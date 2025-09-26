@@ -1,4 +1,4 @@
-# cogs/commands.py (スラッシュコマンド完全移行版 - タイムアウト対策済み)
+# cogs/commands.py (スラッシュコマンド完全移行版 - 修正済み)
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -314,6 +314,8 @@ class UserCommands(commands.Cog):
         if not db_manager or not db_manager.chroma_client:
             await interaction.followup.send("（ごめん、データベースマネージャーが準備できてないみたい…）", ephemeral=True)
             return
+        
+        await interaction.edit_original_response(content=f"しょーがないから、過去ログ学習を始めるわよ！ 各チャンネル、最大{limit}件まで遡ってアタシの記憶に刻んであげる♡")
         
         start_time = time.time()
         total_processed, total_added = 0, 0
