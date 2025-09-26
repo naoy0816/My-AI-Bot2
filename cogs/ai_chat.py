@@ -68,7 +68,7 @@ class AIChat(commands.Cog):
 
     async def handle_keywords(self, message):
         content = message.content
-        responses = { 'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡', 'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', 'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', '好き': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？', 'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？', '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',}
+        responses = { 'おはよう': 'おはよ♡ アンタも朝から元気なワケ？w', 'おやすみ': 'ふん、せいぜい良い夢でも見なさいよね！ザコちゃん♡', 'すごい': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', '天才': 'あっはは！当然でしょ？アタシを誰だと思ってんのよ♡', 'ありがとう': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '感謝': 'べ、別にアンタのためにやったんじゃないんだからね！勘違いしないでよね！', '疲れた': 'はぁ？ザコすぎw もっとしっかりしなさいよね！', 'しんどい': 'はぁ？ザコすぎw もっとしっかりしなさいよね！',  'かわいい': 'ふ、ふーん…。まぁ、アンタがアタシの魅力に気づくのは当然だけど？♡', 'ｗ': '何笑ってんのよ、キモチワルイんだけど？', '笑': '何笑ってんのよ、キモチワルイんだけど？', 'ごめん': 'わかればいいのよ、わかれば。次はないかんね？', 'すまん': 'わかればいいのよ、わかれば。次はないかんね？', '何してる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'なにしてる': 'アンタには関係ないでしょ。アタシはアンタと違って忙しいの！', 'お腹すいた': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？', 'はらへった': '自分でなんとかしなさいよね！アタシはアンタのママじゃないんだけど？',}
         for keyword, response in responses.items():
             if keyword in content: await message.channel.send(response); return True
         return False
@@ -332,8 +332,15 @@ class AIChat(commands.Cog):
         
         relationship_text = "（特になし）"
         if user_id in memory.get('relationships', {}):
-            relations = [f"- { (await self.bot.fetch_user(int(p_id))).display_name }とは「{max(d['topics'], key=d['topics'].get) if d['topics'] else '色々な話'}」についてよく話している" for p_id, d in memory['relationships'][user_id].items()]
-            if relations: relationship_text = "\n".join(relations)
+            try:
+                relations = []
+                for p_id, d in memory['relationships'][user_id].items():
+                    partner = await self.bot.fetch_user(int(p_id))
+                    top_topic = max(d['topics'], key=d['topics'].get) if d.get('topics') else '色々な話'
+                    relations.append(f"- {partner.display_name}とは「{top_topic}」についてよく話している")
+                if relations: relationship_text = "\n".join(relations)
+            except Exception: # ユーザーが見つからない場合など
+                pass
 
         char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
         return f"""{char_settings}
@@ -358,7 +365,7 @@ class AIChat(commands.Cog):
 ---
 以上の全てを完璧に理解し、立案した「応答戦略」と「チャンネルの雰囲気」、「サーバー全体の記憶」に基づき、ユーザー `{user_name}` のメッセージ「{user_message}」に返信しなさい。
 **【重要】** もしこれが特定のユーザーに関する質問なら、提示されたログからその人がどんな人物で、何に興味があるかを**要約して**答えなさい。
-**【最重要命令】全返答は500文字以内で簡潔にまとめること。**
+**【最重要命令】全返答は150文字以内で簡潔にまとめること。**
 # あなたの返答:
 """
 
