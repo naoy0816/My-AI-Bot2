@@ -6,10 +6,8 @@ import requests
 import datetime
 import json
 import google.generativeai as genai
-from . import _utils as utils # ★★★ _utils.pyをインポートするように修正 ★★★
+from . import _utils as utils
 
-# (ここから下のコードは、前回の最適化で提案したものと同じです)
-# (ただし、インポート部分だけ上記のように修正されています)
 DATA_DIR = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '.')
 MEMORY_FILE = os.path.join(DATA_DIR, 'bot_memory.json')
 
@@ -24,9 +22,7 @@ class DailyTasks(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        # ▼▼▼ ここのモデル名を変更 ▼▼▼
-        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        # ▲▲▲ 上の行を 'gemini-pro' に変更 ▲▲▲
+        self.model = genai.GenerativeModel('gemini-1.5-flash-latest') # ★★★ モデル名を修正 ★★★
         self.daily_report.start()
 
     def cog_unload(self):
