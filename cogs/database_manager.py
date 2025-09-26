@@ -45,8 +45,10 @@ class DatabaseManager(commands.Cog):
         return deleted_count
 
     async def add_message_to_db(self, message: discord.Message):
+        if message.author.bot or not message.content or len(message.content) < 5:
+            return False
         collection = self.get_channel_collection(str(message.channel.id))
-        if not collection or not message.content or len(message.content) < 5: return False
+        if not collection: return False
         try:
             if collection.get(ids=[str(message.id)])['ids']: return False
             embedding = await utils.get_embedding(message.content)
@@ -55,7 +57,7 @@ class DatabaseManager(commands.Cog):
             collection.add(embeddings=[embedding], documents=[message.content], metadatas=[metadata], ids=[str(message.id)])
             return True
         except Exception as e:
-            print(f"Error adding message {message.id} to DB collection for channel {message.channel.id}: {e}")
+            print(f"Error adding message {message.id} to DB: {e}")
             return False
 
     async def search_similar_messages(self, query_text: str, channel_id: str, author_id: str = None, top_k: int = 5):
