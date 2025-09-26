@@ -55,7 +55,7 @@ recent_messages = {}
 class AIChat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
         self.db_manager = None
 
     @commands.Cog.listener()
