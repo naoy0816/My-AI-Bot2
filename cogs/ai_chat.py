@@ -215,7 +215,7 @@ class AIChat(commands.Cog):
                 char_settings = persona["settings"].get("char_settings", "").format(user_name=user_name)
                 prompt_parts = [f"{char_settings}\n{multimodal_prompt_template}\n\n# ユーザーのテキスト\n「{user_message or '（…無言でコレをアタシに見せてきたわ）'}」\n\n# あなたの応答:", media_blob]
                 
-                multimodal_model = genai.GenerativeModel('gemini-1.5-pro')
+                multimodal_model = genai.GenerativeModel('gemini-1.5-pro-latest')
                 response = await multimodal_model.generate_content_async(prompt_parts)
                 await message.channel.send(response.text)
             except Exception as e:
