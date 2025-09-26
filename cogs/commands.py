@@ -41,7 +41,9 @@ async def is_owner(interaction: discord.Interaction) -> bool:
 class UserCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        # ▼▼▼ ここのモデル名を変更 ▼▼▼
+        self.model = genai.GenerativeModel('gemini-pro')
+        # ▲▲▲ 上の行を 'gemini-pro' に変更 ▲▲▲
 
     # ★★★ ヘルプコマンド ★★★
     @app_commands.command(name="help", description="アタシが使えるコマンドの一覧よ♡")
