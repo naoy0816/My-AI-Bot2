@@ -8,7 +8,7 @@ import google.generativeai as genai
 # Botの基本的な設定
 intents = discord.Intents.default()
 intents.message_content = True
-# '!'プレフィックスはもう使わないが、下位互換性のために残しても良い
+# '!'プレフィックスは下位互換性のために残しても良い
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 @bot.event
@@ -27,13 +27,8 @@ async def setup_hook():
                 print(f'❌ Failed to load {filename}: {e}')
     print('------------------------------------------------------')
     
-    # ★★★ ここが重要！ 作成したスラッシュコマンドをDiscordサーバーに登録するわ ★★★
+    # ★★★ 作成したスラッシュコマンドをDiscordサーバーに登録するわ ★★★
     try:
-        # 即時反映させたい場合は、ギルドIDを指定する
-        # guild = discord.Object(id=...) # あなたのサーバーIDをここに入れる
-        # bot.tree.copy_global_to(guild=guild)
-        # synced = await bot.tree.sync(guild=guild)
-        
         # 全サーバーに反映（反映に最大1時間かかる場合がある）
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} slash command(s).")
