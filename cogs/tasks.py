@@ -25,7 +25,7 @@ class DailyTasks(commands.Cog):
         self.bot = bot
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
         # ▼▼▼ ここのモデル名を変更 ▼▼▼
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
         # ▲▲▲ 上の行を 'gemini-pro' に変更 ▲▲▲
         self.daily_report.start()
 
